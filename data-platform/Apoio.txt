@@ -1,0 +1,60 @@
+O Mapa de Conexões dos Dados
+A tabela application_train (que você já subiu) é o coração do projeto. Todas as outras tabelas se conectam a ela através da chave única do cliente: o sk_id_curr.
+
+
+                     ┌─────────────────────────┐
+                     │      bureau_balance     │
+                     └────────────┬────────────┘
+                                  │ (via sk_id_bureau)
+                     ┌────────────┴────────────┐
+                     │          bureau         │
+                     └────────────┬────────────┘
+                                  │ (via sk_id_curr)
+┌───────────────────────┐         │         ┌─────────────────────────┐
+│  previous_application  ├─────────┼─────────┤    application_train    │
+└───────────┬───────────┘         │         └─────────────────────────┘
+            │                     │                      
+   ┌────────┼────────┐            │ (via sk_id_curr)
+   │        │        │            │
+┌──┴──┐  ┌──┴──┐  ┌──┴──┐         │
+│ POS │  │ INK │  │ CCB │─────────┘
+└─────┘  └─────┘  └─────┘
+
+O que tem dentro de cada arquivo e qual o valor para o Negócio?
+1. bureau.csv (Histórico em Outros Bancos)
+O que é: Dados de créditos que esse cliente pegou em outras instituições financeiras (relatados ao Banco Central ou Serasa).
+
+Valor de Negócio: Mostra se o cliente já está muito endividado no mercado antes de pedir dinheiro para a Home Credit.
+
+Exemplo de Feature para a ABT: "Quantos empréstimos ativos este cliente tem em outros bancos hoje?"
+
+2. bureau_balance.csv (O comportamento mês a mês nos outros bancos)
+O que é: O histórico mensal de pagamentos de cada crédito listado no bureau.csv.
+
+Valor de Negócio: Mostra a pontualidade do cliente fora de casa. Ele atrasa parcelas nos concorrentes?
+
+Exemplo de Feature para a ABT: "Quantas vezes o cliente atrasou mais de 30 dias em outros bancos no último ano?"
+
+3. previous_application.csv (Histórico Interno na Home Credit)
+O que é: Todos os pedidos de crédito anteriores que o cliente fez dentro da própria Home Credit.
+
+Valor de Negócio: Mostra o relacionamento histórico dele com a sua empresa. Ele já teve crédito recusado antes? Ele já quitou contratos?
+
+Exemplo de Feature para a ABT: "Quantos contratos anteriores deste cliente foram rejeitados pela nossa mesa de crédito?"
+
+4. POS_CASH_balance.csv (Parcelamentos de Lojas)
+O que é: O comportamento mês a mês de empréstimos antigos de consumo (ex: aquele financiamento que o cliente fez para comprar uma geladeira ou celular nas Casas Bahia, onde a Home Credit opera muito).
+
+Valor de Negócio: Captura o comportamento de crédito de varejo de curto prazo.
+
+5. installments_payments.csv (O extrato das parcelas)
+O que é: O histórico de cada parcela paga (ou não paga) dos créditos anteriores na Home Credit. Ele diz o dia em que a parcela vencia e o dia em que o cliente realmente pagou.
+
+Valor de Negócio: É ouro em pó. Se o cliente paga a parcela 3 dias antes do vencimento, ele é ótimo. Se ele paga sempre com 5 dias de atraso, o risco é maior.
+
+Exemplo de Feature para a ABT: "Qual a média de dias de atraso que esse cliente tem no pagamento das nossas parcelas?"
+
+6. credit_card_balance.csv (Fatura do Cartão de Crédito)
+O que é: O comportamento mensal do limite e gastos de cartões de crédito que o cliente tem com a Home Credit.
+
+Valor de Negócio: Mostra se ele está usando 100% do limite do cartão (sinal de sufoco financeiro) ou se usa pouco.
