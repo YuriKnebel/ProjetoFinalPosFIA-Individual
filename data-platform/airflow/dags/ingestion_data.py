@@ -14,7 +14,7 @@ with DAG(
     start_date=datetime(2026, 6, 24),
     schedule=None,
     catchup=False,
-    tags=["producao", "postgres", "reutilizavel"],
+    tags=["ingestion", "postgres"],
 ) as dag:
 
     @task

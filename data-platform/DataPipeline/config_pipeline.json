@@ -1,0 +1,19 @@
+{
+  "database": {
+    "input_table": "application_train",
+    "output_table": "application_clean",
+    "input_prev_table": "previous_application",
+    "output_prev_table": "previous_application_clean",
+    "abt_table": "application_abt"
+  },
+  "cleaning_parameters": {
+    "chunk_size": 50000,
+    "days_employed_anomaly": 365243,
+    "columns_to_absolute": [
+      "days_birth",
+      "days_employed",
+      "days_registration",
+      "days_id_publish"
+    ]
+  }
+}
