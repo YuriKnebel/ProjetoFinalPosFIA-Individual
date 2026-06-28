@@ -68,20 +68,25 @@ def run_abt_generation(conn_id: str):
     offset = 0
     is_first_chunk = True
 
-    # Altere a query_base dentro do seu run_abt_generation no abt_transform.py:
     query_base = f"""
         SELECT 
             app.*,
             COALESCE(prev.prev_contract_count, 0) AS prev_contract_count,
             COALESCE(prev.prev_refused_count, 0) AS prev_refused_count,
-            COALESCE(prev.prev_avg_amt_application, 0) AS prev_avg_amt_application
+            COALESCE(prev.prev_avg_amt_approved, 0) AS prev_avg_amt_approved,
+            COALESCE(prev.prev_avg_amt_refused, 0) AS prev_avg_amt_refused
         FROM "{input_table}" app
         LEFT JOIN (
             SELECT 
                 sk_id_curr,
                 COUNT(sk_id_prev) AS prev_contract_count,
                 SUM(CASE WHEN name_contract_status = 'Refused' THEN 1 ELSE 0 END) AS prev_refused_count,
-                AVG(amt_application) AS prev_avg_amt_application
+                
+                -- Média dos valores dos contratos que foram aprovados
+                AVG(CASE WHEN name_contract_status = 'Approved' THEN amt_application END) AS prev_avg_amt_approved,
+                
+                -- Média dos valores dos contratos que foram recusados
+                AVG(CASE WHEN name_contract_status = 'Refused' THEN amt_application END) AS prev_avg_amt_refused
             FROM previous_application_clean
             GROUP BY sk_id_curr
         ) prev ON app.sk_id_curr = prev.sk_id_curr
