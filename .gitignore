@@ -1,1 +1,5 @@
 /data-platform/airflow/data
+*.pyc
+*.pyc
+*.pyc
+/data-platform/airflow/dags/__pycache__
