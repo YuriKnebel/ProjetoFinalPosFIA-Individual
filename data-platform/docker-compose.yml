@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
 
   # ---------------------------------------------------------------------------
@@ -70,6 +68,7 @@ services:
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./DataPipeline:/opt/airflow/DataPipeline
+      - ./airflow/data/csv:/opt/airflow/data/csv
       - ./Model:/opt/airflow/modelos
 
   # ---------------------------------------------------------------------------
@@ -94,6 +93,7 @@ services:
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./DataPipeline:/opt/airflow/DataPipeline
+      - ./airflow/data/csv:/opt/airflow/data/csv
       - ./Model:/opt/airflow/modelos
 
   # ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ services:
       MB_APPLICATION_SECRET_INITIALIZATION_FILE_PATH: /tmp/metabase-init.json
     volumes:
     # -- MAPEIA O SEU JSON PARA DENTRO DO CONTAINER ---
-      - ./metabase_init.json:/tmp/metabase_init.json
+      - ./metabase-init.json:/tmp/metabase-init.json
     depends_on:
       - postgres
 
@@ -129,6 +129,7 @@ services:
       - ./DataPipeline:/home/jovyan/work
     environment:
       - JUPYTER_ENABLE_LAB=yes
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN}
     # Altere para a mesma rede que o seu Postgres e Airflow usam:
     depends_on:
       - postgres
