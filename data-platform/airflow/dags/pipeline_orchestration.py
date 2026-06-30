@@ -4,11 +4,13 @@ import os
 from airflow import DAG
 from airflow.decorators import task
 
-# Garante que o Airflow consiga encontrar e importar os scripts da pasta DataPipeline
 sys.path.append("/opt/airflow/DataPipeline")
-from data_sanitization import run_sanitization
-from data_sanitization import run_prev_sanitization
+sys.path.append("/opt/airflow/modelos")
+
+from data_sanitization import run_sanitization, run_prev_sanitization
 from abt_transform import run_abt_generation
+from train import train_model
+from train_logistic import train_logistic_model
 
 # Constantes centralizadas
 CONN_ID = "postgres_data_db"
@@ -42,5 +44,13 @@ with DAG(
         # Chama a função mestre do script da ABT passando o ID da conexão nativa
         run_abt_generation(conn_id)
 
+    @task(task_id="train_machine_learning_model")
+    def task_train(conn_id: str):
+        train_model(conn_id)
+
+    @task(task_id="train_logistic_model")
+    def task_train_logistic_model(conn_id: str):
+        train_logistic_model(conn_id)
+
     # Fluxo de execução nativo e limpo
-    task_sanitize(CONN_ID) >> task_sanitize_prev(CONN_ID) >> task_abt(CONN_ID)
+    task_sanitize(CONN_ID) >> task_sanitize_prev(CONN_ID) >> task_abt(CONN_ID) >> task_train(CONN_ID) >> task_train_logistic_model(CONN_ID)

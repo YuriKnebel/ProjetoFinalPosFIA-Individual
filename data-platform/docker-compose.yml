@@ -70,6 +70,7 @@ services:
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./DataPipeline:/opt/airflow/DataPipeline
+      - ./Model:/opt/airflow/modelos
 
   # ---------------------------------------------------------------------------
   # AIRFLOW - SCHEDULER (Executor e agendador das DAGs)
@@ -93,6 +94,7 @@ services:
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./DataPipeline:/opt/airflow/DataPipeline
+      - ./Model:/opt/airflow/modelos
 
   # ---------------------------------------------------------------------------
   # METABASE (Ferramenta de BI e Dashboards na porta 3000)
