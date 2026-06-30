@@ -3,3 +3,4 @@
 *.pyc
 *.pyc
 /data-platform/airflow/dags/__pycache__
+*/.ipynb_checkpoints/*
