@@ -71,6 +71,7 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./DataPipeline:/opt/airflow/DataPipeline
       - ./Model:/opt/airflow/modelos
+      - ./airflow/data:/opt/airflow/data
 
   # ---------------------------------------------------------------------------
   # AIRFLOW - SCHEDULER (Executor e agendador das DAGs)
@@ -95,6 +96,7 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./DataPipeline:/opt/airflow/DataPipeline
       - ./Model:/opt/airflow/modelos
+      - ./airflow/data:/opt/airflow/data
 
   # ---------------------------------------------------------------------------
   # METABASE (Ferramenta de BI e Dashboards na porta 3000)
@@ -116,7 +118,7 @@ services:
       MB_APPLICATION_SECRET_INITIALIZATION_FILE_PATH: /tmp/metabase-init.json
     volumes:
     # -- MAPEIA O SEU JSON PARA DENTRO DO CONTAINER ---
-      - ./metabase_init.json:/tmp/metabase_init.json
+      - ./metabase-init.json:/tmp/metabase-init.json
     depends_on:
       - postgres
 
