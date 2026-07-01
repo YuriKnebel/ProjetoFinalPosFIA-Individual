@@ -1,4 +1,7 @@
 {
+  "ingestion_table": {
+    "using_csv": ["application_train","previous_application"]
+  },
   "database": {
     "input_table": "application_train",
     "output_table": "application_clean",
