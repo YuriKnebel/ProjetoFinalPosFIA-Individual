@@ -52,7 +52,7 @@ def save_dataframe_to_postgres(df: pd.DataFrame, table_name: str, conn_id: str):
         # Gera a estrutura de colunas dinamicamente
         colunas_sql = map_pandas_to_postgres_types(df)
         
-        print(f"♻️ Reiniciando tabela '{table_name}' no banco...")
+        print(f"Reiniciando tabela '{table_name}' no banco...")
         cursor.execute(f'DROP TABLE IF EXISTS "{table_name}" CASCADE;')
         
         sql_create = f'CREATE TABLE "{table_name}" ({", ".join(colunas_sql)});'
@@ -63,11 +63,11 @@ def save_dataframe_to_postgres(df: pd.DataFrame, table_name: str, conn_id: str):
         df.to_csv(output, sep='\t', header=False, index=False)
         output.seek(0)
         
-        print(f"📥 Despejando {len(df)} linhas em '{table_name}' via COPY...")
+        print(f"Despejando {len(df)} linhas em '{table_name}' via COPY...")
         cursor.copy_expert(f'COPY "{table_name}" FROM STDIN WITH CSV DELIMITER \'\t\' NULL \'\'', output)
         
         conn.commit()
-        print(f"✅ Tabela '{table_name}' populada com sucesso!")
+        print(f"Tabela '{table_name}' populada com sucesso!")
         
     except Exception as e:
         conn.rollback()
