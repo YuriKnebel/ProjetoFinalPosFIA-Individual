@@ -1,7 +1,18 @@
 import io
 import pandas as pd
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-from utils import map_pandas_to_postgres_types
+from utils import map_pandas_to_postgres_types, get_database_connection
+
+def load_data_from_abt(conn_id: str, abt_table_name: str) -> pd.DataFrame:
+    """Busca a ABT usando a nossa conexão inteligente camaleônica."""
+    # 🌟 MÁGICA AQUI: Ele descobre sozinho se usa Hook ou SQLAlchemy
+    conn = get_database_connection(conn_id)
+
+    query = f'SELECT * FROM "{abt_table_name}";'
+    df = pd.read_sql_query(query, conn)
+
+    conn.close()
+
+    return df
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
     """Gera novas variáveis explicativas (Engenharia de Features) para a ABT."""
@@ -25,8 +36,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def run_abt_generation(conn_id, chunk_size, input_table, output_table, input_prev_table):
     """Gera a ABT cruzando as tabelas limpas e aplicando a engenharia de features por chunk."""
-    pg_hook = PostgresHook(postgres_conn_id=conn_id)
-    conn = pg_hook.get_conn()
+    conn = get_database_connection(conn_id) 
     cursor = conn.cursor()
 
     print(f" Construindo ABT '{output_table}' a partir de '{input_table}' e '{input_prev_table}'...")

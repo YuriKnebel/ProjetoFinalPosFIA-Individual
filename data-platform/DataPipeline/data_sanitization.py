@@ -1,7 +1,18 @@
 import numpy as np
 import pandas as pd
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-from utils import save_dataframe_to_postgres, append_dataframe_to_postgres
+from utils import save_dataframe_to_postgres, append_dataframe_to_postgres, get_database_connection
+
+def load_data_from_abt(conn_id: str, abt_table_name: str) -> pd.DataFrame:
+    """Busca a ABT usando a nossa conexão inteligente camaleônica."""
+    # 🌟 MÁGICA AQUI: Ele descobre sozinho se usa Hook ou SQLAlchemy
+    conn = get_database_connection(conn_id)
+
+    query = f'SELECT * FROM "{abt_table_name}";'
+    df = pd.read_sql_query(query, conn)
+
+    conn.close()
+
+    return df
 
 def sanitize_data_chunk(df: pd.DataFrame, anomaly_value: int, cols_to_absolute: list) -> pd.DataFrame:
     """Aplica a sua lógica exata de higienização em cada chunk de dados."""
@@ -39,8 +50,7 @@ def sanitize_data_chunk(df: pd.DataFrame, anomaly_value: int, cols_to_absolute: 
 def run_sanitization(conn_id, input_table, output_table, anomaly_value, cols_to_absolute, chunk_size):
     """Higieniza a tabela application_train aplicando sua lógica em chunks."""
     print(f"Sanitizando {input_table} -> {output_table} em blocos de {chunk_size}...")
-    pg_hook = PostgresHook(postgres_conn_id=conn_id)
-    conn = pg_hook.get_conn()
+    conn = get_database_connection(conn_id) 
     
     query = f'SELECT * FROM "{input_table}";'
     chunks = pd.read_sql_query(query, conn, chunksize=chunk_size)
@@ -63,8 +73,7 @@ def run_sanitization(conn_id, input_table, output_table, anomaly_value, cols_to_
 def run_prev_sanitization(conn_id, input_table, output_table, chunk_size):
     """Higieniza a tabela previous_application em chunks."""
     print(f"Sanitizando Histórico: {input_table} -> {output_table} em blocos de {chunk_size}...")
-    pg_hook = PostgresHook(postgres_conn_id=conn_id)
-    conn = pg_hook.get_conn()
+    conn = get_database_connection(conn_id) 
     
     query = f'SELECT * FROM "{input_table}";'
     chunks = pd.read_sql_query(query, conn, chunksize=chunk_size)
