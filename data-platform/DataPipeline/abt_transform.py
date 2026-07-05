@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 from utils import get_database_connection, map_pandas_to_postgres_types
 
-
 # --------------------------------------------------------------------------
 # Lógicas de Engenharia de Features e Agregações 
 # --------------------------------------------------------------------------
@@ -118,6 +117,20 @@ def aggregate_bureau(df_bureau_clean: pd.DataFrame) -> pd.DataFrame:
 
 def build_abt(df_app_clean: pd.DataFrame, feats_app: pd.DataFrame, feats_prev: pd.DataFrame, feats_bureau: pd.DataFrame, bureau_feature_cols: list) -> pd.DataFrame:
     """Junta as fontes (1 linha por cliente) + tratamentos da ABT v2."""
+    
+    # Padronização explícita dos tipos da chave de cruzamento para evitar o erro de object e Int64
+    df_app_clean = df_app_clean.copy()
+    df_app_clean["sk_id_curr"] = pd.to_numeric(df_app_clean["sk_id_curr"], errors="coerce").astype("Int64")
+    
+    feats_app = feats_app.copy()
+    feats_app["sk_id_curr"] = pd.to_numeric(feats_app["sk_id_curr"], errors="coerce").astype("Int64")
+    
+    feats_prev = feats_prev.copy()
+    feats_prev["sk_id_curr"] = pd.to_numeric(feats_prev["sk_id_curr"], errors="coerce").astype("Int64")
+    
+    feats_bureau = feats_bureau.copy()
+    feats_bureau["sk_id_curr"] = pd.to_numeric(feats_bureau["sk_id_curr"], errors="coerce").astype("Int64")
+
     abt = (
         df_app_clean.merge(feats_app, on="sk_id_curr", how="left")
         .merge(feats_prev, on="sk_id_curr", how="left")
@@ -139,7 +152,7 @@ def check_abt_integrity(abt: pd.DataFrame, df_app_clean: pd.DataFrame) -> None:
 # --------------------------------------------------------------------------
 # Função Mestre de Geração da ABT (Seu Padrão de Execução Isolado)
 # --------------------------------------------------------------------------
-def run_abt_generation(conn_id: str, bureau_feature_cols: list, clean_table, prev_table, bureau_table, abt_table  ) -> None:
+def run_abt_generation(conn_id: str, bureau_feature_cols: list, clean_table: str, input_table: str, prev_table: str, bureau_table: str, abt_table: str) -> None:
     """Monta a ABT rica cruzando as tabelas e aplicando a engenharia v2."""
 
     # Utilizando sua conexão inteligente e isolada
@@ -152,14 +165,21 @@ def run_abt_generation(conn_id: str, bureau_feature_cols: list, clean_table, pre
     print("Carregando dados do banco para a memória...")
     df_clean = pd.read_sql_query(f'SELECT * FROM "{clean_table}"', conn)
 
-    query_app = f'SELECT sk_id_curr, days_birth, days_employed, amt_credit, amt_income_total, amt_annuity, cnt_fam_members FROM "{input_table}"'
-    df_app = pd.read_sql_query(query_app,conn)
+    query_app = f"""SELECT sk_id_curr, days_birth, days_employed, amt_credit, amt_income_total, amt_annuity, cnt_fam_members 
+                      FROM "{input_table}"
+                """
+    df_app = pd.read_sql_query(query_app, conn)
 
     query_prev = f"""SELECT sk_id_curr, sk_id_prev, name_contract_status, amt_application, amt_credit,
-                    amt_annuity, amt_down_payment, cnt_payment, days_decision FROM {prev_table}"""
+                    amt_annuity, amt_down_payment, cnt_payment, days_decision FROM "{prev_table}" """
     df_prev = pd.read_sql_query(query_prev, conn)
 
     df_bureau = pd.read_sql_query(f'SELECT * FROM "{bureau_table}"', conn)
+
+    # Forçando cast dos dataframes de entrada para garantir homogeneidade na agregação interna
+    df_app["sk_id_curr"] = pd.to_numeric(df_app["sk_id_curr"], errors="coerce").astype("Int64")
+    df_prev["sk_id_curr"] = pd.to_numeric(df_prev["sk_id_curr"], errors="coerce").astype("Int64")
+    df_bureau["sk_id_curr"] = pd.to_numeric(df_bureau["sk_id_curr"], errors="coerce").astype("Int64")
 
     # 2. Processamento Analítico e Engenharia de Features v2
     print("[v2] Executando pipeline automática de agregação...")
@@ -169,6 +189,7 @@ def run_abt_generation(conn_id: str, bureau_feature_cols: list, clean_table, pre
     )
 
     df_bureau_clean = pd.read_sql_query(f'SELECT * FROM "{bureau_table}"', conn)
+    df_bureau_clean["sk_id_curr"] = pd.to_numeric(df_bureau_clean["sk_id_curr"], errors="coerce").astype("Int64")
 
     feats_bureau = aggregate_bureau(df_bureau_clean)
     # Seleção de colunas baseada na lista parametrizável enviada pela DAG
@@ -176,12 +197,10 @@ def run_abt_generation(conn_id: str, bureau_feature_cols: list, clean_table, pre
 
     # 3. Montagem e Validação da ABT Final
     print("[v2] Consolidando ABT e executando validações de integridade...")
-    abt = build_abt(
-        df_clean, feats_app, feats_prev, feats_bureau, bureau_feature_cols
-    )
+    abt = build_abt(df_clean, feats_app, feats_prev, feats_bureau, bureau_feature_cols)
     check_abt_integrity(abt, df_clean)
 
-    # 4. Destruição da estrutura antiga e mapeamento dinâmico de tipos (Seu Padrão)
+    # 4. Destruição da estrutura antiga e mapeamento dinâmico de tipos 
     print(f"[v2] Preparando estrutura na tabela destino '{abt_table}'...")
     cursor.execute(f'DROP TABLE IF EXISTS "{abt_table}" CASCADE;')
 
@@ -189,18 +208,15 @@ def run_abt_generation(conn_id: str, bureau_feature_cols: list, clean_table, pre
     cursor.execute(f'CREATE TABLE "{abt_table}" ({", ".join(colunas_sql)});')
     conn.commit()
 
-    # 5. Inserção Ultra Rápiva via COPY EXPERT (Seu Padrão)
+    # 5. Inserção Ultra Rápiva via COPY EXPERT
     print(f"[v2] Injetando {len(abt):,} linhas via COPY...")
     output = io.StringIO()
     abt.to_csv(output, sep="\t", header=False, index=False)
     output.seek(0)
 
-    cursor.copy_expert(f'COPY "{abt_table}" FROM STDIN WITH CSV DELIMITER \'\t\' NULL \'\'',output)
+    cursor.copy_expert(f'COPY "{abt_table}" FROM STDIN WITH CSV DELIMITER \'\t\' NULL \'\'', output)
     conn.commit()
 
     cursor.close()
     conn.close()
-    print(
-        f"-------- Geração da ABT Concluída com Sucesso! Tabela '{abt_table}' criada. --------"
-    )
-
+    print(f"-------- Geração da ABT Concluída com Sucesso! Tabela '{abt_table}' criada. --------")

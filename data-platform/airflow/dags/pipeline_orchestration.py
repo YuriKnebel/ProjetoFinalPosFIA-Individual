@@ -20,7 +20,6 @@ CONN_ID = "postgres_data_db"
 PASTA_DATA = "/opt/airflow/data/csv"
 CONFIG_PATH = "/opt/airflow/DataPipeline/config_pipeline.json"
 
-
 with open(CONFIG_PATH, "r") as f:
     config = json.load(f)
 
@@ -28,8 +27,8 @@ with open(CONFIG_PATH, "r") as f:
 tabelas_para_ingerir = config.get("ingestion_table", {}).get("using_csv", [])
 db_config = config.get("database", {})
 clean_params = config.get("cleaning_parameters", {})
-bureau_features_config = config.get("BUREAU_FEATURE_COLS", {})
-sanitization_params = config.get("sanitization")
+bureau_features_config = config.get("BUREAU_FEATURE_COLS", [])
+sanitization_params = config.get("sanitization", {})
 
 with DAG(
     dag_id="pipeline_orchestration",
@@ -55,13 +54,20 @@ with DAG(
         run_bureau_sanitization(conn_id, input_t, output_t, chunk)
 
     @task(task_id="generate_analytical_base_table")
-    def task_abt(conn_id: str, chunk: int, output_t: str, input_t: str, input_prev_t: str):
-        run_abt_generation(conn_id, chunk, input_table=input_t, output_table=output_t, input_prev_table=input_prev_t)
+    def task_abt(conn_id: str, bureau_feature_cols: list, clean_table: str, input_table: str, prev_table: str, bureau_table: str, abt_table: str):
+        run_abt_generation(
+            conn_id=conn_id,
+            bureau_feature_cols=bureau_feature_cols,
+            clean_table=clean_table,
+            input_table=input_table,
+            prev_table=prev_table,
+            bureau_table=bureau_table,
+            abt_table=abt_table
+        )
 
     @task(task_id="train_machine_learning_model")
     def task_train(conn_id: str, abt_table: str):
         train_model(conn_id, abt_table_name=abt_table)
-
 
     # Carga Dinâmica via Mapeamento Nativo
     carga_inicial = task_ingest.partial(
@@ -94,10 +100,12 @@ with DAG(
     
     construcao_abt = task_abt(
         conn_id=CONN_ID,
-        chunk=clean_params.get("chunk_size"),
-        output_t=db_config.get("abt_table"),
-        input_t=db_config.get("output_table"),       
-        input_prev_t=db_config.get("output_prev_table") 
+        bureau_feature_cols=bureau_features_config,
+        clean_table=db_config.get("output_table"),
+        input_table=db_config.get("input_table"),       
+        prev_table=db_config.get("output_prev_table"),
+        bureau_table=db_config.get("output_bureau_table"),
+        abt_table=db_config.get("abt_table")
     )
     
     treino_lgbm = task_train(
@@ -107,4 +115,4 @@ with DAG(
 
     # --- ORQUESTRAÇÃO DAS TASKS ---
     carga_inicial >> [limpeza_app, limpeza_prev, limpeza_bureau]
-    [limpeza_app, limpeza_prev], limpeza_bureau >> construcao_abt >> treino_lgbm
+    [limpeza_app, limpeza_prev, limpeza_bureau] >> construcao_abt >> treino_lgbm
