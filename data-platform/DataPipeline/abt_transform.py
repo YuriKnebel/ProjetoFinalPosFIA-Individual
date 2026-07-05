@@ -201,6 +201,6 @@ def run_abt_generation(conn_id: str, bureau_feature_cols: list, clean_table, pre
     cursor.close()
     conn.close()
     print(
-        f"-------- Geração da ABT v2 Concluída com Sucesso! Tabela '{abt_table}' criada. --------"
+        f"-------- Geração da ABT Concluída com Sucesso! Tabela '{abt_table}' criada. --------"
     )
 
