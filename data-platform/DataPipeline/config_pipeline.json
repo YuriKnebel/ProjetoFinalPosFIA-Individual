@@ -1,22 +1,33 @@
 {
   "ingestion_table": {
-    "using_csv": ["application_train","previous_application"]
+    "using_csv": ["application_train",
+                  "previous_application",
+                  "bureau"
+                  ]
   },
   "database": {
     "input_table": "application_train",
     "output_table": "application_clean",
     "input_prev_table": "previous_application",
     "output_prev_table": "previous_application_clean",
+    "input_bureau_table": "bureau",
+    "output_bureau_table": "bureau_clean",
     "abt_table": "application_abt"
   },
   "cleaning_parameters": {
-    "chunk_size": 50000,
-    "days_employed_anomaly": 365243,
-    "columns_to_absolute": [
-      "days_birth",
-      "days_employed",
-      "days_registration",
-      "days_id_publish"
-    ]
-  }
+    "chunk_size": 50000
+  },
+  "sanitization": {
+    "cardinalidade_min_freq": 500,
+    "income_winsor_q": 0.99
+  },
+  "BUREAU_FEATURE_COLS" : [
+    "bureau_avg_days_credit",
+    "bureau_last_days_credit",
+    "bureau_active_rate",
+    "bureau_active_count",
+    "bureau_closed_rate",
+    "bureau_debt_credit_ratio",
+    "bureau_overdue_count"
+  ]
 }

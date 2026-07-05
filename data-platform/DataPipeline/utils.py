@@ -20,7 +20,7 @@ def get_database_connection(conn_id: str = "postgres_data_db"):
             return pg_hook.get_conn()
         except ImportError:
             print(
-                "⚠️ [CONEXÃO] Aviso: AIRFLOW_HOME ativa, mas falha ao importar PostgresHook. Tentando fallback para SQLAlchemy..."
+                "[CONEXÃO] Aviso: AIRFLOW_HOME ativa, mas falha ao importar PostgresHook. Tentando fallback para SQLAlchemy..."
             )
 
     # Fallback para execução local/notebook via SQLAlchemy
