@@ -36,3 +36,11 @@ http://localhost:8888/
 
 TOKEN: analytics
 
+
+##################################################
+Para gerar a ABT
+##################################################
+
+Faça login no jupyter e rode o notebook exp_analysis_v3.ipynb
+O arquivo abt.csv será gerado na pasta data-platform/DatePipeline
+
