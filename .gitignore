@@ -5,4 +5,5 @@
 /data-platform/airflow/dags/__pycache__
 /data-platform/DataPipeline/.ipynb_checkpoints/*
 /.internal
+abt.csv
 
