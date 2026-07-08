@@ -1,0 +1,158 @@
+{
+  "metadata": {
+    "project": "Predição de risco de crédito",
+    "component": "Model",
+    "version": "1.0.0",
+    "last_updated": "2026-07-06",
+    "description": "Configuração do treinamento, avaliação e inferência do modelo.",
+    "algorithm": "LogisticRegression",
+    "problem_type": "binary_classification",
+    "positive_class": 1,
+    "positive_class_description": "cliente inadimplente",
+    "training_dataset": "Dados/abt.csv",
+    "artifact": "Model/artifacts/logistic_regression_abt.pkl"
+  },
+  "variables": {
+    "identifier": "sk_id_curr",
+    "target": "target",
+    "excluded_from_training": [
+      "sk_id_curr",
+      "target"
+    ],
+    "input_features": [
+      "ext_source_2",
+      "ext_source_mean",
+      "ext_source_1",
+      "ext_source_3",
+      "region_rating_client_w_city",
+      "days_last_phone_change",
+      "days_id_publish",
+      "days_registration",
+      "reg_city_not_work_city",
+      "reg_city_not_live_city",
+      "live_city_not_work_city",
+      "has_car",
+      "own_car_age",
+      "def_60_cnt_social_circle",
+      "amt_req_credit_bureau_year",
+      "cnt_children",
+      "cnt_fam_members",
+      "amt_income_total",
+      "amt_credit",
+      "amt_annuity",
+      "occupation_type",
+      "organization_type",
+      "name_income_type",
+      "name_education_type",
+      "code_gender",
+      "age",
+      "years_employed",
+      "days_employed_anom",
+      "fe_credit_income_percent",
+      "fe_annuity_income_percent",
+      "prev_refused_rate",
+      "has_prev_app",
+      "bureau_avg_days_credit",
+      "bureau_last_days_credit",
+      "bureau_active_rate",
+      "bureau_active_count",
+      "bureau_closed_rate",
+      "bureau_debt_credit_ratio",
+      "bureau_overdue_count",
+      "has_bureau"
+    ]
+  },
+  "parameters": {
+    "split": {
+      "test_size": 0.2,
+      "stratify": true,
+      "random_state": 42
+    },
+    "preprocessing": {
+      "numeric_imputer": "median",
+      "numeric_scaler": "StandardScaler",
+      "categorical_imputer": "most_frequent",
+      "categorical_encoder": "OneHotEncoder",
+      "one_hot_handle_unknown": "ignore",
+      "one_hot_min_frequency": 20
+    },
+    "classifier": {
+      "solver": "newton-cholesky",
+      "max_iter": 100,
+      "random_state": 42
+    },
+    "hyperparameter_search": {
+      "method": "GridSearchCV",
+      "scoring": "roc_auc",
+      "cv_folds": 5,
+      "n_jobs": -1,
+      "classifier__C": [
+        0.01,
+        0.1,
+        1.0,
+        10.0,
+        100.0
+      ],
+      "classifier__class_weight": [
+        null,
+        "balanced"
+      ]
+    },
+    "inference": {
+      "decision_threshold": 0.5
+    },
+    "model_comparison": {
+      "models": [
+        "logistic_regression",
+        "decision_tree",
+        "random_forest"
+      ],
+      "eval_metrics": [
+        "roc_auc",
+        "accuracy",
+        "precision"
+      ],
+      "selection_metric": "roc_auc",
+      "output": "Model/artifacts/model_comparison.csv"
+    }
+  },
+  "model_results": {
+    "selected_model": "logistic_regression",
+    "selection_reason": "Maior ROC AUC no conjunto de teste entre os modelos comparados; ROC AUC foi priorizada por ser mais adequada para uma base desbalanceada e para ordenação de risco.",
+    "best_parameters": {
+      "classifier__C": 0.01,
+      "classifier__class_weight": "balanced"
+    },
+    "test_metrics": {
+      "roc_auc": 0.7561145464927526,
+      "average_precision": 0.23733691050011677
+    },
+    "cross_validation_metrics": {
+      "roc_auc": 0.7465974756094296,
+      "folds": 5
+    },
+    "model_comparison": {
+      "logistic_regression": {
+        "roc_auc": 0.7559914448719658,
+        "accuracy": 0.6906492366226038,
+        "precision": 0.1644312920624314,
+        "average_precision": 0.2373923132038484,
+        "cv_roc_auc_mean": 0.7465068569407125
+      },
+      "random_forest": {
+        "roc_auc": 0.749491561023382,
+        "accuracy": 0.6962424597174122,
+        "precision": 0.1627243668551758,
+        "average_precision": 0.2261044704155214,
+        "cv_roc_auc_mean": 0.7406506944886921
+      },
+      "decision_tree": {
+        "roc_auc": 0.7327468835671911,
+        "accuracy": 0.686291725606881,
+        "precision": 0.155370628697869,
+        "average_precision": 0.2045388641896844,
+        "cv_roc_auc_mean": 0.7231219155722867
+      }
+    }
+  }
+}
