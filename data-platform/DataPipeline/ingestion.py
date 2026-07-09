@@ -1,7 +1,7 @@
 import os
 import json
 import pandas as pd
-from utils import get_database_connection, map_pandas_to_postgres_types
+from utils import get_database_connection, map_pandas_to_postgres_types, append_dataframe_to_postgres
 
 def run_csv_ingestion(pasta_origem: str, table_name: str, conn_id: str, config_file: str, chunk_size: int):
     """Executa a ingestão profissional de um único arquivo em chunks controlados,
@@ -71,17 +71,7 @@ def run_csv_ingestion(pasta_origem: str, table_name: str, conn_id: str, config_f
                 conn.commit()
                 is_first_chunk = False
             
-            # Despeja o chunk atual de forma ultra rápida usando COPY EXPERT em memória por StringIO
-            import io
-            output = io.StringIO()
-            chunk_df.to_csv(output, sep="\t", header=False, index=False)
-            output.seek(0)
-            
-            cursor.copy_expert(
-                f'COPY "{table_name}" FROM STDIN WITH CSV DELIMITER \'\t\' NULL \'\'', 
-                output
-            )
-            conn.commit()
+            append_dataframe_to_postgres(chunk_df, table_name)
             
     except Exception as e:
         conn.rollback()
