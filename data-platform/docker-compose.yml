@@ -141,5 +141,37 @@ services:
     depends_on:
       - postgres
 
+  # ---------------------------------------------------------------------------
+  # MLOPS - API DE INFERÊNCIA
+  # ---------------------------------------------------------------------------
+  credit-api:
+    build:
+      context: .
+      dockerfile: MLOps/Dockerfile.api
+    ports:
+      - "${CREDIT_API_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://airflow:airflow@postgres:5432/data
+      CREDIT_APPROVE_MAX_SCORE: "0.35"
+      CREDIT_MANUAL_REVIEW_MAX_SCORE: "0.65"
+      CREDIT_POLICY_VERSION: demo-v1
+    depends_on:
+      - postgres
+
+
+  # ---------------------------------------------------------------------------
+  # MLOPS - INTERFACE DE DEMONSTRAÇÃO
+  # ---------------------------------------------------------------------------
+  credit-frontend:
+    build:
+      context: .
+      dockerfile: MLOps/Dockerfile.frontend
+    ports:
+      - "${CREDIT_FRONTEND_PORT:-8501}:8501"
+    environment:
+      CREDIT_API_URL: http://credit-api:8000
+    depends_on:
+      - credit-api
+
 volumes:
   pgdata:
