@@ -1,0 +1,22 @@
+{
+  "algorithm": "LightGBM",
+  "hyperparameters": {
+    "n_estimators": 276,
+    "learning_rate": 0.0985,
+    "num_leaves": 24,
+    "max_depth": 3,
+    "min_child_samples": 163,
+    "colsample_bytree": 0.7692,
+    "reg_lambda": 1.5025,
+    "class_weight": "balanced"
+  },
+  "test_metrics": {
+    "roc_auc": 0.7573,
+    "gini": 0.5145,
+    "ks": 0.388,
+    "average_precision": 0.2419,
+    "brier": 0.1934
+  },
+  "decision_threshold": 0.5,
+  "trained_at_utc": "2026-07-09T00:44:24+00:00"
+}
