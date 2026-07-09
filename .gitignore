@@ -6,4 +6,5 @@
 /data-platform/DataPipeline/.ipynb_checkpoints/*
 /.internal
 abt.csv
-
+.venv
+/data-platform/Model/.venv/**
