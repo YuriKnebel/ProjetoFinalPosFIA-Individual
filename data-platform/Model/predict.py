@@ -10,7 +10,7 @@ import pandas as pd
 from pathlib import Path
 
 MODEL_DIR = Path(__file__).resolve().parent
-ARTIFACT_PATH = MODEL_DIR / "model_artifact.pkl"
+ARTIFACT_PATH = MODEL_DIR / "artifacts/lightgbm_abt.pkl"
 
 
 def get_database_connection(conn_id: str = "postgres_data_db", silent: bool = False):
