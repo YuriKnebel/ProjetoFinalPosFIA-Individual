@@ -74,7 +74,7 @@ services:
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./DataPipeline:/opt/airflow/DataPipeline
-      - ./Model:/opt/airflow/modelos
+      - ./Model:/opt/airflow/Model
       - ./airflow/data:/opt/airflow/data
 
   # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ services:
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./DataPipeline:/opt/airflow/DataPipeline
-      - ./Model:/opt/airflow/modelos
+      - ./Model:/opt/airflow/Model
       - ./airflow/data:/opt/airflow/data
 
   # ---------------------------------------------------------------------------
