@@ -48,9 +48,9 @@ services:
     command: >
       bash -c "airflow db migrate &&
       airflow users create --username admin --firstname Airflow --lastname Admin --role Admin --email admin@example.com --password admin &&
-      airflow pools set pool_ingestao 1 'Pool exclusivo para limitar a ingestão a 2 task por vez' &&
-      airflow pools set pool_sanitization 1 'Pool exclusivo para limitar a sanitizacao a 2 task por vez' &&
-      airflow pools set pool_aggregation 1 'Pool exclusivo para limitar a agregacao a 2 task por vez'"
+      airflow pools set pool_ingestao 2 'Pool exclusivo para limitar a ingestão a 2 task por vez' &&
+      airflow pools set pool_sanitization 2 'Pool exclusivo para limitar a sanitizacao a 2 task por vez' &&
+      airflow pools set pool_aggregation 2 'Pool exclusivo para limitar a agregacao a 2 task por vez'"
   # ---------------------------------------------------------------------------
   # AIRFLOW - WEBSERVER (Interface Gráfica na porta 8080)
   # ---------------------------------------------------------------------------
