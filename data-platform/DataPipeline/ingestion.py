@@ -1,32 +1,36 @@
 import os
 import json
 import pandas as pd
-from utils import save_dataframe_to_postgres
+from utils import get_database_connection, map_pandas_to_postgres_types
 
-def run_csv_ingestion(table_name: str, conn_id: str, pasta_origem: str, config_file: str):
-    """Executa a ingestão de um único arquivo CSV mapeado no escopo do JSON."""
-    
-    # 1. Validação de Escopo via JSON
+def run_csv_ingestion(pasta_origem: str, table_name: str, conn_id: str, config_file: str, chunk_size: int):
+    """Executa a ingestão profissional de um único arquivo em chunks controlados,
+    adaptando-se à validação dinâmica do escopo mapeado no JSON.
+    """
+    # 1. Carrega o arquivo de configuração para validação de escopo
     if not os.path.exists(config_file):
-        raise FileNotFoundError(f"Arquivo de configuração não encontrado em: {config_file}")
+        raise FileNotFoundError(f"Arquivo de configuração não encontrado: {config_file}")
         
     with open(config_file, "r") as f:
         config = json.load(f)
         
-    tabelas_permitidas = config.get("ingestion_table", {}).get("using_csv", [])
+    # Extrai a lista de objetos do JSON
+    tabelas_permitidas_config = config.get("ingestion_table", {}).get("using_csv", [])
     
-    if table_name not in tabelas_permitidas:
-        raise ValueError(f"A tabela '{table_name}' NÃO está homologada no escopo do JSON: {tabelas_permitidas}")
+    # Extrai apenas os nomes das tabelas para validação de escopo
+    nomes_permitidos = [t.get("table_name") for t in tabelas_permitidas_config if isinstance(t, dict)]
+
+    if table_name not in nomes_permitidos:
+        raise ValueError(f"A tabela '{table_name}' Não foi listada no escopo do JSON: {nomes_permitidos}")
         
     if not os.path.exists(pasta_origem):
         raise FileNotFoundError(f"A pasta de origem {pasta_origem} não existe.")
 
-    # 2. Localização do arquivo correspondente na pasta
-    # Buscamos arquivos que, normalizados, batam com o nome da tabela solicitado
+    # 2. Localização flexível e resiliente do arquivo correspondente na pasta
     arquivo_alvo = None
     for arquivo in os.listdir(pasta_origem):
         nome_arq, extensao = os.path.splitext(arquivo)
-        if nome_arq.lower().replace("-", "_").replace(" ", "_") == table_name:
+        if nome_arq.lower().replace("-", "_").replace(" ", "_") == table_name.lower():
             arquivo_alvo = arquivo
             break
             
@@ -36,21 +40,54 @@ def run_csv_ingestion(table_name: str, conn_id: str, pasta_origem: str, config_f
     caminho_completo = os.path.join(pasta_origem, arquivo_alvo)
     _, extensao = os.path.splitext(arquivo_alvo)
 
-    print(f"📖 Lendo {arquivo_alvo} para ingestão da tabela '{table_name}'...")
-    
-    # 3. Leitura resiliente do arquivo
-    if extensao.lower() == '.csv':
-        try:
-            df = pd.read_csv(caminho_completo, encoding='utf-8')
-        except UnicodeDecodeError:
-            df = pd.read_csv(caminho_completo, encoding='latin-1')
-    elif extensao.lower() == '.json':
-        df = pd.read_json(caminho_completo)
-    elif extensao.lower() in ['.xlsx', '.xls']:
-        df = pd.read_excel(caminho_completo)
-    else:
-        raise ValueError(f"Formato {extensao} não suportado para a tabela {table_name}")
+    print(f"[INGESTÃO] Processando '{arquivo_alvo}' para a tabela '{table_name}' em blocos de {chunk_size}...")
 
-    # 4. Gravação de alta performance via utils
-    save_dataframe_to_postgres(df=df, table_name=table_name, conn_id=conn_id)
-    print(f"Ingestão da tabela '{table_name}' concluída com sucesso!")
+    # 3. Leitura resiliente de Encodings via Iterator (Chunks)
+    try:
+        chunks_iterator = pd.read_csv(caminho_completo, encoding='utf-8', chunksize=chunk_size)
+        # Força um teste de leitura rápido no primeiro chunk para capturar erro de encoding antes do loop
+        first_chunk = pd.read_csv(caminho_completo, encoding='utf-8', nrows=5)
+    except UnicodeDecodeError:
+        chunks_iterator = pd.read_csv(caminho_completo, encoding='latin-1', chunksize=chunk_size)
+
+    # 4. Gravação de alta performance via COPY EXPERT estruturado por chunks
+    conn = get_database_connection(conn_id)
+    cursor = conn.cursor()
+    
+    is_first_chunk = True
+    
+    try:
+        for num_lote, chunk_df in enumerate(chunks_iterator):
+            print(f"Processando e salvando lote #{num_lote + 1} para a tabela '{table_name}'...")
+            
+            # Se for o primeiro pedaço do arquivo, limpa a tabela antiga e cria o Schema novo
+            if is_first_chunk:
+                print(f"Reiniciando estrutura da tabela '{table_name}' no banco de dados...")
+                cursor.execute(f'DROP TABLE IF EXISTS "{table_name}" CASCADE;')
+                
+                # Mapeia dinamicamente as colunas usando função do utils.py
+                colunas_sql = map_pandas_to_postgres_types(chunk_df)
+                cursor.execute(f'CREATE TABLE "{table_name}" ({", ".join(colunas_sql)});')
+                conn.commit()
+                is_first_chunk = False
+            
+            # Despeja o chunk atual de forma ultra rápida usando COPY EXPERT em memória por StringIO
+            import io
+            output = io.StringIO()
+            chunk_df.to_csv(output, sep="\t", header=False, index=False)
+            output.seek(0)
+            
+            cursor.copy_expert(
+                f'COPY "{table_name}" FROM STDIN WITH CSV DELIMITER \'\t\' NULL \'\'', 
+                output
+            )
+            conn.commit()
+            
+    except Exception as e:
+        conn.rollback()
+        raise RuntimeError(f"Falha crítica durante a ingestão por chunks da tabela {table_name}: {str(e)}")
+    finally:
+        cursor.close()
+        conn.close()
+
+    print(f"Ingestão da tabela '{table_name}' concluída com sucesso")
