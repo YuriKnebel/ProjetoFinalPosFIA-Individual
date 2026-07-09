@@ -17,7 +17,7 @@ from data_sanitization import (
 )
 from data_sanitization_index import run_abt_indexes
 from abt_transform import create_agg_previous_application, create_agg_bureau, create_agg_installments, run_abt_generation
-from train import train_model
+from train import run_training_pipeline
 
 from airflow import DAG
 from airflow.decorators import task
@@ -109,7 +109,7 @@ with DAG(
     # --- TASK DE TREINAMENTO ---
     @task(task_id="train_machine_learning_model")
     def task_train(conn_id: str, abt_table: str):
-        train_model(conn_id, abt_table)
+        run_training_pipeline(conn_id=conn_id, abt_table=abt_table)
 
     # --- INSTANCIANDO AS TAREFAS ---
     carga_inicial = task_ingest.partial(
