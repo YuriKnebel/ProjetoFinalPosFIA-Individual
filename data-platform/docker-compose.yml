@@ -1,3 +1,5 @@
+version: "3.8"
+
 services:
 
   # ---------------------------------------------------------------------------
@@ -5,6 +7,7 @@ services:
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:15
+    shm_size: 2gb
     container_name: postgres
     ports:
       - "5432:5432"
@@ -16,7 +19,6 @@ services:
       bash -c "
       docker-entrypoint.sh postgres &
       until pg_isready -U airflow; do sleep 1; done;
-      psql -U airflow -d airflow -c 'CREATE DATABASE metabase;' || true;
       psql -U airflow -d airflow -c 'CREATE DATABASE data;' || true;
       wait"
     volumes:
@@ -28,6 +30,7 @@ services:
   airflow-init:
     build: ./airflow
     container_name: airflow-init
+    user: "${AIRFLOW_UID:-50000}:0"
     depends_on:
       - postgres
     environment:
@@ -44,14 +47,19 @@ services:
       _AIRFLOW_WWW_USER_LASTNAME: User
       _AIRFLOW_WWW_USER_ROLE: Admin
       _AIRFLOW_WWW_USER_EMAIL: admin@example.com
-    command: bash -c "airflow db migrate && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com"
-
+    command: >
+      bash -c "airflow db migrate &&
+      airflow users create --username admin --firstname Airflow --lastname Admin --role Admin --email admin@example.com --password admin &&
+      airflow pools set pool_ingestao 2 'Pool exclusivo para limitar a ingestão a 2 task por vez' &&
+      airflow pools set pool_sanitization 2 'Pool exclusivo para limitar a sanitizacao a 2 task por vez' &&
+      airflow pools set pool_aggregation 2 'Pool exclusivo para limitar a agregacao a 2 task por vez'"
   # ---------------------------------------------------------------------------
   # AIRFLOW - WEBSERVER (Interface Gráfica na porta 8080)
   # ---------------------------------------------------------------------------
   airflow-webserver:
     build: ./airflow
     container_name: airflow-webserver
+    user: "${AIRFLOW_UID:-50000}:0"
     restart: always
     depends_on:
       airflow-init:
@@ -68,8 +76,8 @@ services:
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./DataPipeline:/opt/airflow/DataPipeline
-      - ./airflow/data/csv:/opt/airflow/data/csv
-      - ./Model:/opt/airflow/modelos
+      - ./Model:/opt/airflow/Model
+      - ./airflow/data:/opt/airflow/data
 
   # ---------------------------------------------------------------------------
   # AIRFLOW - SCHEDULER (Executor e agendador das DAGs)
@@ -77,6 +85,7 @@ services:
   airflow-scheduler:
     build: ./airflow
     container_name: airflow-scheduler
+    user: "${AIRFLOW_UID:-50000}:0"
     restart: always
     depends_on:
       airflow-init:
@@ -93,53 +102,26 @@ services:
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./DataPipeline:/opt/airflow/DataPipeline
-      - ./airflow/data/csv:/opt/airflow/data/csv
-      - ./Model:/opt/airflow/modelos
+      - ./Model:/opt/airflow/Model
+      - ./airflow/data:/opt/airflow/data
 
   # ---------------------------------------------------------------------------
   # METABASE (Ferramenta de BI e Dashboards na porta 3000)
   # ---------------------------------------------------------------------------
-  metabase:
-    image: metabase/metabase:v0.49.0
-    container_name: metabase
-    ports:
-      - "3000:3000"
-    restart: always
-    environment:
-      MB_DB_TYPE: postgres
-      MB_DB_DBNAME: metabase
-      MB_DB_PORT: 5432
-      MB_DB_USER: airflow
-      MB_DB_PASS: airflow
-      MB_DB_HOST: postgres
-      # --- INDICA O ARQUIVO DE IMPORTAÇÃO DE BANCOS ---
-      MB_APPLICATION_SECRET_INITIALIZATION_FILE_PATH: /tmp/metabase-init.json
-    volumes:
-    # -- MAPEIA O SEU JSON PARA DENTRO DO CONTAINER ---
-      - ./metabase-init.json:/tmp/metabase-init.json
-    depends_on:
-      - postgres
 
-  # ---------------------------------------------------------------------------
-  # JUPYTER (Ambiente de notebooks na porta 8888)
-  # ---------------------------------------------------------------------------
   jupyter:
-    build:
-      context: ./jupyter
-      dockerfile: Dockerfile
-    image: jupyter-fia:latest
+    image: jupyter/datascience-notebook:latest
     container_name: jupyter_fia
-    restart: always
     ports:
       - "8888:8888"
     volumes:
       - ./DataPipeline:/home/jovyan/work
-      - ./Model:/home/jovyan/modelos
     environment:
       - JUPYTER_ENABLE_LAB=yes
-      - JUPYTER_TOKEN=${JUPYTER_TOKEN}
+    # Altere para a mesma rede que o seu Postgres e Airflow usam:
     depends_on:
       - postgres
+
 
   # ---------------------------------------------------------------------------
   # MLOPS - API DE INFERÊNCIA

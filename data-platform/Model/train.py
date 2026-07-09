@@ -2,14 +2,7 @@
 
 Le a ABT ja limpa direto do Postgres (tabela ``application_abt``, saida da pipeline),
 treina o LightGBM com **categoricas nativas** (sem one-hot) usando os hiperparametros
-escolhidos na validacao (Modelo 25 do ``validacao_modelos.ipynb``), avalia num holdout
-e retreina o modelo final na base completa. O artefato final e um pacote (pickle) com
-o modelo + metadados, pronto para o ``predict.py``.
-
-Uso, a partir de ``data-platform`` (ex.: dentro do container jupyter)::
-
-    python Model/train.py                 # treino completo
-    python Model/train.py --sample-size 20000   # smoke test rapido
+escolhidos na validacao, avalia num holdout e retreina o modelo final na base completa.
 """
 
 from __future__ import annotations
@@ -24,12 +17,18 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import create_engine
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import (average_precision_score, brier_score_loss,
-                             classification_report, roc_auc_score, roc_curve)
+from sklearn.metrics import (
+    average_precision_score,
+    brier_score_loss,
+    classification_report,
+    roc_auc_score,
+    roc_curve,
+)
 from lightgbm import LGBMClassifier
 
+# Reaproveitando a conexão inteligente do projeto
+from utils import get_database_connection
 
 MODEL_DIR = Path(__file__).resolve().parent
 DATA_PLATFORM_DIR = MODEL_DIR.parent
@@ -50,28 +49,28 @@ def project_path(configured_path: str) -> Path:
     return DATA_PLATFORM_DIR / configured_path
 
 
-def get_engine(config: dict[str, Any]):
-    """Cria a engine do Postgres, detectando o host (docker x local)."""
-    db = config["database"]
-    host = db["host_docker"] if os.path.exists("/.dockerenv") else db["host_local"]
-    url = f"postgresql://{db['user']}:{db['password']}@{host}:{db['port']}/{db['dbname']}"
-    print(f"[dados] Conectando ao Postgres em {host}:{db['port']}/{db['dbname']}")
-    return create_engine(url)
+def load_training_data(
+    config: dict[str, Any],
+    conn_id: str = "postgres_data_db",
+    sample_size: int | None = None,
+):
+    """Le a ABT do Postgres usando utils e devolve X, y com as categoricas como 'category'."""
+    # Utilizando a conexão padrão do projeto para Airflow/Localbox
+    conn = get_database_connection(conn_id=conn_id, silent=False)
 
-
-def load_training_data(config: dict[str, Any], sample_size: int | None = None):
-    """Le a ABT do Postgres e devolve X, y com as categoricas marcadas como 'category'.
-
-    Marcar as categoricas como ``category`` faz o LightGBM usar o split otimo nativo
-    (agrupa categorias numa unica divisao), sem one-hot e sem impor ordem falsa.
-    """
-    engine = get_engine(config)
     table = config["metadata"]["abt_table"]
-    query = f"SELECT * FROM {table}"
+    query = f'SELECT * FROM "{table}"'
     if sample_size:
         query += f" LIMIT {int(sample_size)}"
-    frame = pd.read_sql(query, engine)
-    print(f"[dados] ABT carregada: {frame.shape[0]:,} linhas x {frame.shape[1]} colunas")
+
+    try:
+        frame = pd.read_sql_query(query, conn)
+    finally:
+        conn.close()
+
+    print(
+        f"[dados] ABT carregada: {frame.shape[0]:,} linhas x {frame.shape[1]} colunas"
+    )
 
     variables = config["variables"]
     features = variables["input_features"]
@@ -85,14 +84,16 @@ def load_training_data(config: dict[str, Any], sample_size: int | None = None):
 
     X = frame[features].replace([np.inf, -np.inf], np.nan).copy()
     y = frame[target].astype(int)
+
     for col in categoricals:
         if col in X.columns:
             X[col] = X[col].astype("category")
+
     return X, y
 
 
 def build_model(config: dict[str, Any]) -> LGBMClassifier:
-    """Instancia o LightGBM com os hiperparametros fixos do config (Modelo 25)."""
+    """Instancia o LightGBM com os hiperparametros fixos do config."""
     hp = dict(config["parameters"]["classifier"]["hyperparameters"])
     return LGBMClassifier(
         random_state=config["parameters"]["random_state"],
@@ -115,38 +116,85 @@ def credit_metrics(y_true: np.ndarray, proba: np.ndarray) -> dict[str, float]:
     }
 
 
-def train(config: dict[str, Any], sample_size: int | None = None) -> dict[str, Any]:
+def train(
+    config: dict[str, Any],
+    conn_id: str = "postgres_data_db",
+    sample_size: int | None = None,
+) -> dict[str, Any]:
     """Treina, avalia no holdout e retreina o modelo final na base completa."""
-    X, y = load_training_data(config, sample_size)
+    print("\n" + "=" * 60)
+    print(
+        f"[MLOPS-TRAIN] INICIANDO PIPELINE DE MODELAGEM - VE REGISTRO: {config['metadata']['version']}"
+    )
+    print("=" * 60)
+
+    X, y = load_training_data(config, conn_id, sample_size)
     params = config["parameters"]
     seed = params["random_state"]
     threshold = params["inference"]["decision_threshold"]
 
+    # Log da proporção do Target original (bom para monitorar desbalanceamento)
+    taxa_inadimplencia = y.mean() * 100
+    print(f"[dados] Volumetria total da ABT: {len(y):,} registros")
+    print(f"[dados] Proporção da classe positiva (Target=1): {taxa_inadimplencia:.2f}%")
+
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
+        X,
+        y,
         test_size=params["split"]["test_size"],
         stratify=y if params["split"]["stratify"] else None,
         random_state=seed,
     )
 
-    # 1) modelo de avaliacao: treina no treino, mede no holdout (metricas honestas)
-    print("[treino] Ajustando modelo de avaliacao (holdout)...")
+    print(
+        f"[split] Dados divididos com sucesso (test_size={params['split']['test_size']}):"
+    )
+    print(f"        -> Treino: {X_train.shape[0]:,} linhas")
+    print(f"        -> Teste (Holdout): {X_test.shape[0]:,} linhas")
+
+    # 1) Modelo de avaliacao
+    print("\n[treino] Ajustando modelo de avaliação no conjunto de Treino...")
     eval_model = build_model(config).fit(X_train, y_train)
+
+    print("[avaliacao] Calculando predições e métricas no Holdout...")
     score = eval_model.predict_proba(X_test)[:, 1]
     metrics = credit_metrics(y_test.to_numpy(), score)
-    print(f"[avaliacao] Metricas no teste externo: {json.dumps(metrics, ensure_ascii=False)}")
-    print(classification_report(y_test, (score >= threshold).astype(int),
-                                target_names=["Adimplente (0)", "Inadimplente (1)"], digits=4))
 
-    # 2) modelo final: retreina em TODA a base (usa 100% dos dados para o deploy)
-    print("[treino] Retreinando o modelo final na base completa...")
+    # Exibe as métricas de forma estruturada no log do Airflow
+    print("-" * 50)
+    print("[AVALIAÇÃO - MÉTRICAS DE RISCO DE CRÉDITO]")
+    print(f"  - ROC AUC:           {metrics['roc_auc']:.4f}")
+    print(f"  - GINI:              {metrics['gini']:.4f}")
+    print(f"  - KS:                {metrics['ks']:.4f}")
+    print(f"  - Avg Precision:     {metrics['average_precision']:.4f}")
+    print(f"  - Brier Score Loss:  {metrics['brier']:.4f}")
+    print("-" * 50)
+
+    # Adiciona o relatório padrão do scikit-learn para ver precision/recall por classe
+    y_pred_class = (score >= threshold).astype(int)
+    report = classification_report(
+        y_test, y_pred_class, target_names=["Adimplente (0)", "Inadimplente (1)"]
+    )
+    print("[avaliacao] Relatório de Classificação de Negócio:")
+    print(report)
+
+    # 2) Modelo final
+    print("\n[treino] Retreinando o modelo final com 100% dos dados da ABT...")
     final_model = build_model(config).fit(X, y)
+    print("[treino] Modelo final ajustado com sucesso.")
 
-    categoricals = [c for c in config["variables"]["categorical_features"] if c in X.columns]
+    categoricals = [
+        c for c in config["variables"]["categorical_features"] if c in X.columns
+    ]
+
+    print("\n" + "=" * 60)
+    print("[MLOPS-TRAIN] PIPELINE DE TREINAMENTO CONCLUÍDA COM SUCESSO")
+    print("=" * 60 + "\n")
+
     return {
         "model": final_model,
+        "features": list(X.columns),
         "decision_threshold": threshold,
-        "input_features": list(X.columns),
         "categorical_features": categoricals,
         "categories": {c: [str(v) for v in X[c].cat.categories] for c in categoricals},
         "metrics": metrics,
@@ -162,6 +210,7 @@ def save_artifact(artifact: dict[str, Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as file:
         pickle.dump(artifact, file)
+
     metrics_path = output.parent / "metrics.json"
     resumo = {
         "algorithm": artifact["algorithm"],
@@ -170,26 +219,53 @@ def save_artifact(artifact: dict[str, Any], output: Path) -> None:
         "decision_threshold": artifact["decision_threshold"],
         "trained_at_utc": artifact["trained_at_utc"],
     }
-    metrics_path.write_text(json.dumps(resumo, indent=2, ensure_ascii=False), encoding="utf-8")
+    metrics_path.write_text(
+        json.dumps(resumo, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     print(f"[artefato] Modelo salvo em: {output}")
     print(f"[artefato] Metricas salvas em: {metrics_path}")
 
 
+# Esta é a função chamada pelo Airflow através do script de orquestração
+def run_training_pipeline(conn_id: str, abt_table: str):
+    """Ponto de entrada oficial para a Task da DAG do Airflow."""
+    print(
+        f"[AIRFLOW TASK] Iniciando pipeline de treinamento para a tabela: {abt_table}"
+    )
+    config = load_config(DEFAULT_CONFIG_PATH)
+
+    # Garante que a tabela vinda da DAG sobrescreva a do config se necessário
+    config["metadata"]["abt_table"] = abt_table
+
+    artifact = train(config, conn_id=conn_id)
+    output = project_path(config["metadata"]["artifact"])
+    save_artifact(artifact, output)
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH,
-                        help="Caminho do config_model.json")
-    parser.add_argument("--sample-size", type=int, default=None,
-                        help="Le apenas N linhas da ABT (smoke test rapido)")
-    parser.add_argument("--output", type=Path, default=None,
-                        help="Sobrescreve o caminho do artefato")
+    parser = argparse.ArgumentParser(description="Treino local do modelo")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Caminho do config_model.json",
+    )
+    parser.add_argument(
+        "--sample-size",
+        type=int,
+        default=None,
+        help="Le apenas N linhas da ABT (smoke test rapido)",
+    )
+    parser.add_argument(
+        "--output", type=Path, default=None, help="Sobrescreve o caminho do artefato"
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
-    artifact = train(config, args.sample_size)
+    artifact = train(config, conn_id="postgres_data_db", sample_size=args.sample_size)
     output = args.output or project_path(config["metadata"]["artifact"])
     save_artifact(artifact, output)
 
