@@ -2,9 +2,9 @@
   "ingestion_table": {
       "using_csv": [
         { "table_name": "application_train", "chunk_size": 50000 },
-        { "table_name": "previous_application", "chunk_size": 50000 },
+        { "table_name": "previous_application", "chunk_size": 100000 },
         { "table_name": "bureau", "chunk_size": 50000 },
-        { "table_name": "installments_payments", "chunk_size": 100000 }
+        { "table_name": "installments_payments", "chunk_size": 200000 }
       ]
   },
   "database": {
@@ -18,9 +18,6 @@
     "output_installments_table": "installments_clean",
     "abt_table": "application_abt"
   },
-  "cleaning_parameters": {
-    "chunk_size": 50000
-  },
   "indexes": {
     "application_train": "sk_id_curr",
     "previous_application": "sk_id_prev",
@@ -29,14 +26,5 @@
   "sanitization": {
     "cardinalidade_min_freq": 500,
     "income_winsor_q": 0.99
-  },
-  "BUREAU_FEATURE_COLS" : [
-    "bureau_avg_days_credit",
-    "bureau_last_days_credit",
-    "bureau_active_rate",
-    "bureau_active_count",
-    "bureau_closed_rate",
-    "bureau_debt_credit_ratio",
-    "bureau_overdue_count"
-  ]
+  }
 }
