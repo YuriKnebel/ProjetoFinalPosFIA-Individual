@@ -8,7 +8,14 @@ sys.path.append("/opt/airflow/DataPipeline")
 sys.path.append("/opt/airflow/modelos")
 
 from ingestion import run_csv_ingestion
-from data_sanitization import run_sanitization, run_prev_sanitization, run_bureau_sanitization
+from ingestion_index import run_create_indexes
+from data_sanitization import (
+    run_sanitization, 
+    run_prev_sanitization, 
+    run_bureau_sanitization,
+    run_installments_sanitization
+)
+from data_sanitization_index import run_abt_indexes
 from abt_transform import create_agg_previous_application, create_agg_bureau, create_agg_installments, run_abt_generation
 from train import train_model
 
@@ -26,8 +33,6 @@ with open(CONFIG_PATH, "r") as f:
 # Extração das chaves do JSON para distribuição nas tasks
 tabelas_para_ingerir = config.get("ingestion_table", {}).get("using_csv", [])
 db_config = config.get("database", {})
-clean_params = config.get("cleaning_parameters", {})
-bureau_features_config = config.get("BUREAU_FEATURE_COLS", [])
 sanitization_params = config.get("sanitization", {})
 
 with DAG(
@@ -54,43 +59,52 @@ with DAG(
             chunk_size=tamanho_chunk
         )
 
+    @task
+    def task_criar_indices(conn_id: str):
+        """ Cria os índices de performance antes de rodar os SQLs de limpeza"""
+        run_create_indexes(conn_id)
+    
     # --- TASKS DE HIGIENIZAÇÃO ---
-    @task(task_id="sanitize_application_train", pool="pool_sanitization")
+    @task(task_id="task_sanitize_app", pool="pool_sanitization")
     def task_sanitize_app(conn_id: str, input_t: str, output_t: str, min_freq: int, winsor_q: float):
+        """Sanitiza application_train usando parâmetros explícitos (sem chunk_size)"""
         run_sanitization(conn_id, input_t, output_t, min_freq, winsor_q)
 
-    @task(task_id="sanitize_previous_application", pool="pool_sanitization")
-    def task_sanitize_prev(conn_id: str, input_t: str, output_t: str, chunk: int):
-        run_prev_sanitization(conn_id, input_t, output_t, chunk)
+    @task(task_id="task_sanitize_prev", pool="pool_sanitization")
+    def task_sanitize_prev(conn_id: str, input_t: str, output_t: str):
+        run_prev_sanitization(conn_id, input_t, output_t)
 
-    @task(task_id="sanitize_bureau", pool="pool_sanitization")
-    def task_sanitize_bureau(conn_id: str, input_t: str, output_t: str, chunk: int):
-        run_bureau_sanitization(conn_id, input_t, output_t, chunk)
+    @task(task_id="task_sanitize_bureau", pool="pool_sanitization")
+    def task_sanitize_bureau(conn_id: str, input_t: str, output_t: str):
+        run_bureau_sanitization(conn_id, input_t, output_t)
+        
+    @task(task_id="task_sanitize_installments", pool="pool_sanitization")
+    def task_sanitize_installments(conn_id: str, input_t: str, output_t: str):
+        run_installments_sanitization(conn_id, input_t, output_t)
+
+    @task
+    def task_abt_indexes(conn_id: str, config: dict):
+        """Cria os índices nas tabelas_clean preparatórias para a ABT."""
+        run_abt_indexes(conn_id, config)
 
     # --- TASKS INTERMEDIÁRIAS PARA AGREGACAO (PROCESSADAS VIA SQL NO BANCO) ---
     @task(task_id="agg_intermediate_prev", pool="pool_aggregation")
-    def task_agg_prev(conn_id: str, output_prev_table: str):
-        create_agg_previous_application(conn_id, output_prev_table)
+    def task_agg_prev(conn_id: str, out_tb: str):
+        create_agg_previous_application(conn_id, out_tb)
 
     @task(task_id="agg_intermediate_bureau", pool="pool_aggregation")
-    def task_agg_bureau(conn_id: str, output_bureau_table: str):
-        create_agg_bureau(conn_id, output_bureau_table)
+    def task_agg_bureau(conn_id: str, out_tb: str):
+        create_agg_bureau(conn_id, out_tb)
 
     @task(task_id="agg_intermediate_installments", pool="pool_aggregation")
-    def task_agg_inst(conn_id: str, output_installments_table: str):
-        create_agg_installments(conn_id, output_installments_table)
+    def task_agg_inst(conn_id: str, out_tb: str):
+        create_agg_installments(conn_id, out_tb)
 
     # --- TASK DA CONSTRUÇÃO DA ABT EM LOTES ---
     @task(task_id="generate_analytical_base_table")
-    def task_abt(conn_id: str, bureau_feature_cols: list, clean_table: str, abt_table: str, chunk_size: int, key_col: str):
-        run_abt_generation(
-            conn_id=conn_id,
-            bureau_feature_cols=bureau_feature_cols,
-            clean_table=clean_table,
-            abt_table=abt_table,
-            chunk_size=chunk_size,
-            key_col=key_col
-        )
+    def task_abt_final_generation(conn_id: str, config: dict):
+        """Gera a ABT final via ELT."""
+        run_abt_generation(conn_id, config)
 
     # --- TASK DE TREINAMENTO ---
     @task(task_id="train_machine_learning_model")
@@ -104,6 +118,8 @@ with DAG(
         config_file=CONFIG_PATH
     ).expand(config_tabela=tabelas_para_ingerir)
 
+    cria_indices = task_criar_indices(CONN_ID)
+
     limpeza_app = task_sanitize_app(
         conn_id=CONN_ID,
         input_t=db_config.get("input_table"),
@@ -115,36 +131,29 @@ with DAG(
     limpeza_prev = task_sanitize_prev(
         conn_id=CONN_ID,
         input_t=db_config.get("input_prev_table"),
-        output_t=db_config.get("output_prev_table"),
-        chunk=clean_params.get("chunk_size", 50000)
+        output_t=db_config.get("output_prev_table")
     )
 
     limpeza_bureau = task_sanitize_bureau(
         conn_id=CONN_ID,
         input_t=db_config.get("input_bureau_table"),
-        output_t=db_config.get("output_bureau_table"),
-        chunk=clean_params.get("chunk_size", 50000)
+        output_t=db_config.get("output_bureau_table")
     )
 
+    limpeza_installments = task_sanitize_installments(
+        conn_id=CONN_ID,
+        input_t=db_config.get("input_installments_table"),
+        output_t=db_config.get("output_installments_table")
+    )
+
+    t_abt_index = task_abt_indexes(CONN_ID, db_config)
     t_prev = task_agg_prev(CONN_ID, db_config.get("output_prev_table"))
     t_bureau = task_agg_bureau(CONN_ID, db_config.get("output_bureau_table"))
-    t_inst = task_agg_inst(CONN_ID, db_config.get("output_installments_table", "installments_clean"))
-
-    t_abt_final = task_abt(
-        conn_id=CONN_ID,
-        bureau_feature_cols=bureau_features_config,
-        clean_table=db_config.get("output_table"),
-        abt_table=db_config.get("abt_table"),
-        chunk_size=clean_params.get("chunk_size", 50000),
-        key_col=config.get("indexes", {}).get(db_config.get("input_table"), "sk_id_curr")
-    )
+    t_inst = task_agg_inst(CONN_ID, db_config.get("output_installments_table"))
+    t_abt_final = task_abt_final_generation(CONN_ID, db_config)
 
     treino_modelo = task_train(CONN_ID, db_config.get("abt_table"))
 
     # --- DEFINIÇÃO DO FLUXO (DEPENDÊNCIAS) ---
-    carga_inicial >> [limpeza_app, limpeza_prev, limpeza_bureau]
-    
-    limpeza_prev >> t_prev
-    limpeza_bureau >> [t_bureau, t_inst]
-    
-    [t_prev, t_bureau, t_inst, limpeza_app] >> t_abt_final >> treino_modelo
+    carga_inicial >> cria_indices >> [limpeza_app, limpeza_prev, limpeza_bureau, limpeza_installments ] >> t_abt_index
+    t_abt_index >>[t_prev, t_bureau, t_inst] >> t_abt_final >> treino_modelo
