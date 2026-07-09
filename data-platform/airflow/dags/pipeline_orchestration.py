@@ -82,7 +82,7 @@ with DAG(
 
     # --- TASK DA CONSTRUÇÃO DA ABT EM LOTES ---
     @task(task_id="generate_analytical_base_table")
-    def task_abt_v2(conn_id: str, bureau_feature_cols: list, clean_table: str, abt_table: str, chunk_size: int, key_col: str):
+    def task_abt(conn_id: str, bureau_feature_cols: list, clean_table: str, abt_table: str, chunk_size: int, key_col: str):
         run_abt_generation(
             conn_id=conn_id,
             bureau_feature_cols=bureau_feature_cols,
@@ -130,7 +130,7 @@ with DAG(
     t_bureau = task_agg_bureau(CONN_ID, db_config.get("output_bureau_table"))
     t_inst = task_agg_inst(CONN_ID, db_config.get("output_installments_table", "installments_clean"))
 
-    t_abt_final = task_abt_v2(
+    t_abt_final = task_abt(
         conn_id=CONN_ID,
         bureau_feature_cols=bureau_features_config,
         clean_table=db_config.get("output_table"),

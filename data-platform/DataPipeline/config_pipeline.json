@@ -1,9 +1,11 @@
 {
   "ingestion_table": {
-    "using_csv": ["application_train",
-                  "previous_application",
-                  "bureau"
-                  ]
+      "using_csv": [
+        { "table_name": "application_train", "chunk_size": 50000 },
+        { "table_name": "previous_application", "chunk_size": 50000 },
+        { "table_name": "bureau", "chunk_size": 50000 },
+        { "table_name": "installments_payments", "chunk_size": 100000 }
+      ]
   },
   "database": {
     "input_table": "application_train",
@@ -12,10 +14,17 @@
     "output_prev_table": "previous_application_clean",
     "input_bureau_table": "bureau",
     "output_bureau_table": "bureau_clean",
+    "input_installments_table": "installments_payments",
+    "output_installments_table": "installments_clean",
     "abt_table": "application_abt"
   },
   "cleaning_parameters": {
     "chunk_size": 50000
+  },
+  "indexes": {
+    "application_train": "sk_id_curr",
+    "previous_application": "sk_id_prev",
+    "bureau": "sk_id_bureau"
   },
   "sanitization": {
     "cardinalidade_min_freq": 500,
