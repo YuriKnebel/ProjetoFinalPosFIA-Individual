@@ -60,7 +60,7 @@ def map_pandas_to_postgres_types(df: pd.DataFrame) -> list:
     return colunas
 
 def append_dataframe_to_postgres(
-    df: pd.DataFrame, table_name: str, conn_id: str
+    df: pd.DataFrame, table_name: str, conn_id: str = "postgres_data_db"
 ):
     """Insere os dados de um chunk em uma tabela já existente usando a conexão híbrida."""
     conn = get_database_connection(conn_id)
