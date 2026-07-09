@@ -110,14 +110,23 @@ services:
   # ---------------------------------------------------------------------------
 
   jupyter:
-    image: jupyter/datascience-notebook:latest
+    build:
+      context: ./jupyter
+      dockerfile: Dockerfile
+    image: jupyter-fia:latest
     container_name: jupyter_fia
     ports:
       - "8888:8888"
     volumes:
       - ./DataPipeline:/home/jovyan/work
+      - ./DataPipeline:/home/jovyan/project/DataPipeline
+      - ./Dados:/home/jovyan/project/Dados
+      - ./Model:/home/jovyan/project/Model
+      - ./MLOps:/home/jovyan/project/MLOps
     environment:
       - JUPYTER_ENABLE_LAB=yes
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN}
+      - DATABASE_URL=postgresql://airflow:airflow@postgres:5432/data
     # Altere para a mesma rede que o seu Postgres e Airflow usam:
     depends_on:
       - postgres
