@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 predict.py — Serviço de predição local de risco de crédito.
 
@@ -9,10 +8,29 @@ import argparse
 import pickle
 import pandas as pd
 from pathlib import Path
-from utils import get_database_connection
 
 MODEL_DIR = Path(__file__).resolve().parent
-ARTIFACT_PATH = MODEL_DIR / "model_artifact.pkl"
+ARTIFACT_PATH = MODEL_DIR / "artifacts/lightgbm_abt.pkl"
+
+
+def get_database_connection(conn_id: str = "postgres_data_db", silent: bool = False):
+    """Retorna uma conexão ativa com o banco.
+
+    Detecta automaticamente se está rodando dentro do fluxo do Airflow (usa
+    PostgresHook) ou de forma isolada (usa SQLAlchemy).
+    """
+    from sqlalchemy import create_engine
+    import os
+
+    # Mapeando o host baseado no ambiente (se roda dentro do ecossistema docker ou na máquina local)
+    # No docker o host do banco chama-se 'postgres'. Na máquina local acessamos via 'localhost'
+    host = "postgres" if os.path.exists("/.dockerenv") else "localhost"
+    conn_str = f"postgresql://airflow:airflow@{host}:5432/data"
+
+    if not silent:
+        print(f"[CONEXÃO] Execução isolada detectada (Local/Notebook). Conectando via SQLAlchemy em '{host}'.")
+    engine = create_engine(conn_str)
+    return engine.raw_connection()
 
 def load_artifact(artifact_path: Path):
     if not artifact_path.exists():
@@ -62,6 +80,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print(f"[PREDICT] Carregando artefato...")
+    print(ARTIFACT_PATH)
     artifact = load_artifact(ARTIFACT_PATH)
     
     print(f"[PREDICT] Buscando features para sk_id_curr = {args.sk_id}...")

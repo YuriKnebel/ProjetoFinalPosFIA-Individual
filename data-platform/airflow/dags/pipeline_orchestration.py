@@ -5,7 +5,7 @@ import json
 
 # Mapeamento dos caminhos do projeto
 sys.path.append("/opt/airflow/DataPipeline")
-sys.path.append("/opt/airflow/modelos")
+sys.path.append("/opt/airflow/Model")
 
 from ingestion import run_csv_ingestion
 from ingestion_index import run_create_indexes
