@@ -34,6 +34,47 @@ def get_database_connection(conn_id: str = "postgres_data_db", silent: bool = Fa
     engine = create_engine(conn_str)
     return engine.raw_connection()
 
+
+def get_database_engine(conn_id: str = "postgres_data_db", silent: bool = False):
+    """Retorna um Engine do SQLAlchemy (ideal para pd.read_sql em notebooks).
+
+    Usa a mesma deteccao de ambiente da get_database_connection, mas devolve o
+    Engine (nao a conexao crua) — evitando o warning do pandas com DBAPI cru.
+    """
+    if "AIRFLOW_HOME" in os.environ:
+        try:
+            from airflow.providers.postgres.hooks.postgres import PostgresHook
+
+            if not silent:
+                print(f"[CONEXÃO] Ambiente Airflow detectado. Engine via PostgresHook('{conn_id}').")
+            return PostgresHook(postgres_conn_id=conn_id).get_sqlalchemy_engine()
+        except ImportError:
+            if not silent:
+                print("[CONEXÃO] AIRFLOW_HOME ativa, mas falha ao importar PostgresHook. Fallback SQLAlchemy...")
+
+    from sqlalchemy import create_engine
+
+    host = "postgres" if os.path.exists("/.dockerenv") else "localhost"
+    conn_str = f"postgresql://airflow:airflow@{host}:5432/data"
+    if not silent:
+        print(f"[CONEXÃO] Execução isolada detectada (Local/Notebook). Engine SQLAlchemy em '{host}'.")
+    return create_engine(conn_str)
+
+
+def load_pipeline_config(path: str = None) -> dict:
+    """Carrega o config_pipeline.json (por padrao, o que fica ao lado deste utils.py).
+
+    Evita chumbar nomes de tabela/parametros nos notebooks — le a mesma fonte
+    de verdade que a DAG (Airflow) usa.
+    """
+    import json
+    from pathlib import Path
+
+    cfg_path = Path(path) if path else Path(__file__).resolve().parent / "config_pipeline.json"
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def map_pandas_to_postgres_types(df: pd.DataFrame) -> list:
     """Mapeia os dtypes do Pandas para tipos de dados compatíveis com o PostgreSQL."""
     colunas = []
