@@ -1,10 +1,10 @@
 {
   "ingestion_table": {
       "using_csv": [
-        { "table_name": "application_train", "chunk_size": 50000 },
-        { "table_name": "previous_application", "chunk_size": 100000 },
-        { "table_name": "bureau", "chunk_size": 50000 },
-        { "table_name": "installments_payments", "chunk_size": 200000 }
+        { "table_name": "application_train", "chunk_size": 150000 },
+        { "table_name": "previous_application", "chunk_size": 300000 },
+        { "table_name": "bureau", "chunk_size": 150000 },
+        { "table_name": "installments_payments", "chunk_size": 600000 }
       ]
   },
   "database": {
