@@ -1,5 +1,8 @@
 /data-platform/airflow/data
+
+# Python
 *.pyc
-*.pyc
-*.pyc
-/data-platform/airflow/dags/__pycache__
+__pycache__/
+
+# Jupyter
+.ipynb_checkpoints/
