@@ -4,7 +4,6 @@ predict.py — Serviço de predição local de risco de crédito.
 Lê o artefato `.pkl` gerado na pipeline, recebe os dados de um cliente
 (via ID do banco ou via JSON local) e retorna o escore de risco e a decisão.
 """
-
 import argparse
 import pickle
 import pandas as pd
@@ -29,90 +28,72 @@ def get_database_connection(conn_id: str = "postgres_data_db", silent: bool = Fa
     conn_str = f"postgresql://airflow:airflow@{host}:5432/data"
 
     if not silent:
-        print(
-            f"[CONEXÃO] Execução isolada detectada (Local/Notebook). Conectando via SQLAlchemy em '{host}'."
-        )
+        print(f"[CONEXÃO] Execução isolada detectada (Local/Notebook). Conectando via SQLAlchemy em '{host}'.")
     engine = create_engine(conn_str)
     return engine.raw_connection()
 
-
 def load_artifact(artifact_path: Path):
     if not artifact_path.exists():
-        raise FileNotFoundError(
-            f"Artefato não encontrado: {artifact_path}. Execute o train.py antes."
-        )
+        raise FileNotFoundError(f"Artefato não encontrado: {artifact_path}. Execute o train.py antes.")
     with open(artifact_path, "rb") as f:
         return pickle.load(f)
 
-
-def load_features_from_abt(
-    sk_id: int, conn_id: str, features_esperadas: list
-) -> pd.DataFrame:
+def load_features_from_abt(sk_id: int, conn_id: str, features_esperadas: list) -> pd.DataFrame:
     """Busca os dados fresquinhos do cliente direto na ABT usando o utils."""
     conn = get_database_connection(conn_id, silent=True)
-
+    
     # Puxa o cliente, excluindo colunas não preditivas
-    query = f"SELECT * FROM application_abt WHERE sk_id_curr = {sk_id} LIMIT 1;"
+    query = f'SELECT * FROM application_abt WHERE sk_id_curr = {sk_id} LIMIT 1;'
     df = pd.read_sql(query, conn)
     conn.close()
-
+    
     if df.empty:
-        raise ValueError(
-            f"Cliente sk_id_curr={sk_id} não encontrado na base de dados (ABT)."
-        )
-
+        raise ValueError(f"Cliente sk_id_curr={sk_id} não encontrado na base de dados (ABT).")
+        
     return df
-
 
 def predict_score(df_features: pd.DataFrame, artifact: dict) -> dict:
     """Executa a inferência e retorna a decisão de negócio."""
     model = artifact["model"]
     features_esperadas = artifact["features"]
     threshold = artifact["decision_threshold"]
-
+    
     # Filtra e alinha colunas
-    df_inf = df_features[
-        [c for c in features_esperadas if c in df_features.columns]
-    ].copy()
-
+    df_inf = df_features[[c for c in features_esperadas if c in df_features.columns]].copy()
+    
     # Garante tipagem categórica
-    for col in df_inf.select_dtypes(include=["object", "string"]).columns:
-        df_inf[col] = df_inf[col].astype("category")
-
+    for col in df_inf.select_dtypes(include=['object', 'string']).columns:
+        df_inf[col] = df_inf[col].astype('category')
+        
     proba = model.predict_proba(df_inf)[0, 1]
-
+    
     return {
         "risk_score": round(proba, 4),
         "decision_threshold": threshold,
         "predicted_class": int(proba >= threshold),
-        "decision": "NEGAR_CREDITO" if proba >= threshold else "APROVAR_CREDITO",
+        "decision": "NEGAR_CREDITO" if proba >= threshold else "APROVAR_CREDITO"
     }
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Inferencia de Risco de Crédito")
-    parser.add_argument(
-        "--sk-id", type=int, required=True, help="ID do cliente para busca na ABT"
-    )
+    parser.add_argument("--sk-id", type=int, required=True, help="ID do cliente para busca na ABT")
     args = parser.parse_args()
 
     print(f"[PREDICT] Carregando artefato...")
     print(ARTIFACT_PATH)
     artifact = load_artifact(ARTIFACT_PATH)
-
+    
     print(f"[PREDICT] Buscando features para sk_id_curr = {args.sk_id}...")
-    df_client = load_features_from_abt(
-        args.sk_id, "postgres_data_db", artifact["features"]
-    )
-
+    df_client = load_features_from_abt(args.sk_id, "postgres_data_db", artifact["features"])
+    
     print("[PREDICT] Rodando modelo...")
     resultado = predict_score(df_client, artifact)
-
-    print("\n" + "=" * 40)
+    
+    print("\n" + "="*40)
     print(" RESULTADO DA ANÁLISE DE CRÉDITO ")
-    print("=" * 40)
+    print("="*40)
     print(f"  > Cliente ID    : {args.sk_id}")
     print(f"  > Risk Score    : {resultado['risk_score']}")
     print(f"  > Ponto de Corte: {resultado['decision_threshold']}")
     print(f"  > DECISÃO FINAL : {resultado['decision']}")
-    print("=" * 40 + "\n")
+    print("="*40 + "\n")
