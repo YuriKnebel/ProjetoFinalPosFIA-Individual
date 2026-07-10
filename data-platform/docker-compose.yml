@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
 
   # ---------------------------------------------------------------------------
@@ -15,14 +13,14 @@ services:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
       POSTGRES_DB: airflow
-    entrypoint: >
-      bash -c "
-      docker-entrypoint.sh postgres &
-      until pg_isready -U airflow; do sleep 1; done;
-      psql -U airflow -d airflow -c 'CREATE DATABASE data;' || true;
-      wait"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
 
   # ---------------------------------------------------------------------------
   # AIRFLOW - INIT (Prepara o banco utilizando os comandos nativos da imagem)
@@ -30,9 +28,10 @@ services:
   airflow-init:
     build: ./airflow
     container_name: airflow-init
-    user: "${AIRFLOW_UID:-50000}:0"
+    user: "0:0"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
@@ -48,18 +47,23 @@ services:
       _AIRFLOW_WWW_USER_ROLE: Admin
       _AIRFLOW_WWW_USER_EMAIL: admin@example.com
     command: >
-      bash -c "airflow db migrate &&
+      bash -c "mkdir -p /opt/airflow/data/csv /opt/airflow/Model/artifacts &&
+      chmod -R ugo+rwX /opt/airflow/data /opt/airflow/Model/artifacts &&
+      airflow db migrate &&
       airflow users create --username admin --firstname Airflow --lastname Admin --role Admin --email admin@example.com --password admin &&
       airflow pools set pool_ingestao 2 'Pool exclusivo para limitar a ingestão a 2 task por vez' &&
       airflow pools set pool_sanitization 2 'Pool exclusivo para limitar a sanitizacao a 2 task por vez' &&
       airflow pools set pool_aggregation 2 'Pool exclusivo para limitar a agregacao a 2 task por vez'"
+    volumes:
+      - ./Model:/opt/airflow/Model
+      - ./airflow/data:/opt/airflow/data
+
   # ---------------------------------------------------------------------------
   # AIRFLOW - WEBSERVER (Interface Gráfica na porta 8080)
   # ---------------------------------------------------------------------------
   airflow-webserver:
     build: ./airflow
     container_name: airflow-webserver
-    user: "${AIRFLOW_UID:-50000}:0"
     restart: always
     depends_on:
       airflow-init:
@@ -85,7 +89,6 @@ services:
   airflow-scheduler:
     build: ./airflow
     container_name: airflow-scheduler
-    user: "${AIRFLOW_UID:-50000}:0"
     restart: always
     depends_on:
       airflow-init:
@@ -110,27 +113,19 @@ services:
   # ---------------------------------------------------------------------------
 
   jupyter:
-    build:
-      context: ./jupyter
-      dockerfile: Dockerfile
-    image: jupyter-fia:latest
+    build: ./jupyter
     container_name: jupyter_fia
     ports:
       - "8888:8888"
     volumes:
-      - ./DataPipeline:/home/jovyan/work
-      - ./DataPipeline:/home/jovyan/project/DataPipeline
-      - ./Dados:/home/jovyan/project/Dados
-      - ./Model:/home/jovyan/project/Model
-      - ./MLOps:/home/jovyan/project/MLOps
+      - ./DataPipeline:/home/jovyan/work/DataPipeline
+      - ./Model:/home/jovyan/work/Model
     environment:
       - JUPYTER_ENABLE_LAB=yes
       - JUPYTER_TOKEN=${JUPYTER_TOKEN}
-      - DATABASE_URL=postgresql://airflow:airflow@postgres:5432/data
     # Altere para a mesma rede que o seu Postgres e Airflow usam:
     depends_on:
       - postgres
-
 
   # ---------------------------------------------------------------------------
   # MLOPS - API DE INFERÊNCIA
@@ -148,7 +143,6 @@ services:
       CREDIT_POLICY_VERSION: demo-v1
     depends_on:
       - postgres
-
 
   # ---------------------------------------------------------------------------
   # MLOPS - INTERFACE DE DEMONSTRAÇÃO
