@@ -252,7 +252,7 @@ Antes da exportação, o script registra a quantidade de linhas da tabela. Em se
 
 ### Preparação do ambiente local
 
-Execute os comandos a partir da raiz do repositório:
+Execute os comandos de preparação a partir da raiz do repositório:
 
 ```bash
 python3 -m venv data-platform/DataPipeline/.venv
@@ -268,18 +268,32 @@ docker compose -f data-platform/docker-compose.yml up -d postgres
 
 ### Execução manual
 
+Entre na pasta `DataPipeline` para que o caminho relativo de saída seja resolvido para `data-platform/airflow/data/csv`:
+
 ```bash
-data-platform/DataPipeline/.venv/bin/python \
-  data-platform/DataPipeline/export_data.py
+cd data-platform/DataPipeline
+.venv/bin/python export_data.py
 ```
 
-Na configuração atual do bloco `__main__`, o comando exporta `application_abt` para:
+Na configuração atual do bloco `__main__`, o comando exporta:
 
-```text
-data-platform/data/application_abt.csv
-```
+| Tabela PostgreSQL | Arquivo gerado |
+|---|---|
+| `application_clean` | `airflow/data/csv/application_clean.csv` |
+| `previous_application_clean` | `airflow/data/csv/previous_application_clean.csv` |
+| `bureau_clean` | `airflow/data/csv/bureau_clean.csv` |
+| `installments_clean` | `airflow/data/csv/installments_clean.csv` |
+| `application_abt` | `airflow/data/csv/application_abt.csv` |
 
-O caminho é relativo ao diretório em que o comando é executado. Por isso, o exemplo acima parte da raiz do repositório.
+Esses arquivos são gravados ao lado dos quatro CSVs brutos usados na ingestão. Assim, o diretório reúne as fontes originais, suas representações tratadas e a ABT final. O caminho é relativo ao diretório de execução; por isso, o comando deve ser iniciado em `data-platform/DataPipeline`.
+
+Os arquivos já foram materializados em `data-platform/airflow/data/csv`, pasta originalmente destinada aos arquivos brutos. Atualmente ela reúne:
+
+- as quatro fontes brutas: `application_train.csv`, `previous_application.csv`, `bureau.csv` e `installments_payments.csv`;
+- as quatro bases tratadas: `application_clean.csv`, `previous_application_clean.csv`, `bureau_clean.csv` e `installments_clean.csv`;
+- a base analítica final: `application_abt.csv`.
+
+A convivência no mesmo diretório atende à preparação manual da entrega. Os sufixos `_clean` e `_abt` distinguem claramente os arquivos gerados pelo pipeline das fontes brutas usadas na ingestão.
 
 ### Exportação de outra tabela
 
@@ -295,7 +309,7 @@ run_postgres_to_csv_export(
 )
 ```
 
-Esse exemplo gera `data-platform/Dados/application_clean.csv`. Atualmente o script exporta uma tabela por chamada e usa o próprio nome da tabela como nome do arquivo; nomes específicos de entrega, como `clean_data.csv`, exigem uma etapa posterior de renomeação ou uma evolução do contrato da função.
+Esse exemplo gera `data-platform/Dados/application_clean.csv`. A função exporta uma tabela por chamada e usa o nome da tabela para identificar claramente o conteúdo do arquivo.
 
 ## Execução
 

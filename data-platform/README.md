@@ -268,6 +268,8 @@ O componente `DataPipeline` inclui o utilitário [`export_data.py`](./DataPipeli
 
 O utilitário não integra a DAG e não altera o fluxo operacional da plataforma. Sua execução ocorre somente depois que o pipeline tiver criado as tabelas que serão entregues.
 
+Os arquivos exportados já foram adicionados a `data-platform/airflow/data/csv`, a mesma pasta que contém os arquivos brutos de entrada. O diretório passa a concentrar as quatro fontes originais, suas quatro versões tratadas e `application_abt.csv`, com uma linha por cliente.
+
 As dependências, os pré-requisitos, o comando de execução e a forma de selecionar a tabela de origem estão documentados na seção [Exportação de tabelas para CSV](./DataPipeline/README.md#exportação-de-tabelas-para-csv).
 
 ## Notebooks oficiais
