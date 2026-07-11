@@ -44,19 +44,26 @@ def api_request(method: str, url: str, **kwargs: Any) -> Any:
         raise RuntimeError(f"A API retornou HTTP {response.status_code}: {detail}") from error
 
 
-def render_input(field: FieldConfig) -> Any:
+def render_input(
+    field: FieldConfig,
+    value_override: Any | None = None,
+    key_prefix: str = "feature",
+) -> Any:
     """Renderiza o componente adequado e devolve um valor serializável em JSON."""
-    key = f"feature_{field.name}"
+    key = f"{key_prefix}_{field.name}"
+    default = field.default if value_override is None else value_override
+
     if field.kind == "category":
-        index = field.options.index(str(field.default))
+        selected = str(default)
+        index = field.options.index(selected) if selected in field.options else 0
         return st.selectbox(field.label, field.options, index=index, key=key, help=field.help or None)
     if field.kind == "boolean":
-        value = st.selectbox(field.label, ("Não", "Sim"), index=int(field.default), key=key)
+        value = st.selectbox(field.label, ("Não", "Sim"), index=int(default), key=key)
         return int(value == "Sim")
 
     arguments: dict[str, Any] = {
         "label": field.label,
-        "value": int(field.default) if field.kind == "integer" else float(field.default),
+        "value": int(default) if field.kind == "integer" else float(default),
         "step": int(field.step) if field.kind == "integer" else float(field.step),
         "key": key,
         "help": field.help or None,
@@ -67,6 +74,32 @@ def render_input(field: FieldConfig) -> Any:
         arguments["max_value"] = int(field.maximum) if field.kind == "integer" else float(field.maximum)
     value = st.number_input(**arguments)
     return int(value) if field.kind == "integer" else float(value)
+
+
+def render_feature_form(
+    form_key: str,
+    submit_label: str,
+    loaded_features: dict[str, Any] | None = None,
+    key_prefix: str = "feature",
+) -> tuple[dict[str, Any], bool]:
+    """Renderiza todos os campos agrupados e devolve as features preenchidas."""
+    with st.form(form_key):
+        features: dict[str, Any] = {}
+        for group in GROUPS:
+            st.subheader(group)
+            group_fields = [field for field in FIELDS if field.group == group]
+            columns = st.columns(3)
+            for index, field in enumerate(group_fields):
+                with columns[index % 3]:
+                    features[field.name] = render_input(
+                        field,
+                        value_override=(loaded_features or {}).get(field.name),
+                        key_prefix=key_prefix,
+                    )
+        submitted = st.form_submit_button(
+            submit_label, type="primary", use_container_width=True
+        )
+    return features, submitted
 
 
 def show_result(result: dict[str, Any]) -> None:
@@ -120,20 +153,21 @@ with st.sidebar:
     st.divider()
     st.caption("A interface envia os dados à API. O modelo permanece isolado no backend.")
 
-tab_features, tab_customer = st.tabs(("Preencher todos os dados", "Consultar cliente do banco"))
+tab_features, tab_loaded_customer, tab_customer = st.tabs(
+    (
+        "Preencher todos os dados",
+        "Buscar cliente e editar",
+        "Consultar cliente do banco",
+    )
+)
 
 with tab_features:
     st.write("Preencha as informações esperadas pelo endpoint `POST /predict/features`.")
-    with st.form("credit_features_form"):
-        features: dict[str, Any] = {}
-        for group in GROUPS:
-            st.subheader(group)
-            group_fields = [field for field in FIELDS if field.group == group]
-            columns = st.columns(3)
-            for index, field in enumerate(group_fields):
-                with columns[index % 3]:
-                    features[field.name] = render_input(field)
-        submitted = st.form_submit_button("Analisar crédito", type="primary", use_container_width=True)
+    features, submitted = render_feature_form(
+        form_key="credit_features_form",
+        submit_label="Analisar crédito",
+        key_prefix="feature",
+    )
 
     if submitted:
         payload = {"features": features}
@@ -145,6 +179,70 @@ with tab_features:
             show_result(result)
         except RuntimeError as error:
             st.error(str(error))
+
+with tab_loaded_customer:
+    st.write(
+        "Busque um cliente na base, carregue as features no formulário e ajuste "
+        "os campos antes de enviar para análise."
+    )
+
+    lookup_columns = st.columns([2, 1])
+    with lookup_columns[0]:
+        lookup_customer_id = st.number_input(
+            "Código do cliente para carregar dados",
+            min_value=1,
+            value=100002,
+            step=1,
+            key="lookup_customer_id",
+        )
+    with lookup_columns[1]:
+        st.write("")
+        st.write("")
+        lookup_submitted = st.button(
+            "Buscar cliente",
+            type="primary",
+            use_container_width=True,
+            key="lookup_customer_button",
+        )
+
+    if lookup_submitted:
+        try:
+            with st.spinner("Buscando features do cliente..."):
+                loaded = api_request(
+                    "GET",
+                    f"{api_url}/customers/{int(lookup_customer_id)}/features",
+                )
+            st.session_state["loaded_customer_id"] = loaded["customer_id"]
+            st.session_state["loaded_customer_features"] = loaded["features"]
+            st.success(f"Cliente {loaded['customer_id']} carregado. Você pode editar os campos abaixo.")
+        except RuntimeError as error:
+            st.error(str(error))
+
+    loaded_features = st.session_state.get("loaded_customer_features")
+    loaded_customer_id = st.session_state.get("loaded_customer_id")
+
+    if loaded_features:
+        st.caption(f"Formulário preenchido com dados do cliente {loaded_customer_id}.")
+        edited_features, edited_submitted = render_feature_form(
+            form_key="loaded_credit_features_form",
+            submit_label="Analisar crédito com dados editados",
+            loaded_features=loaded_features,
+            key_prefix=f"loaded_feature_{loaded_customer_id}",
+        )
+
+        if edited_submitted:
+            payload = {"features": edited_features}
+            with st.expander("JSON enviado à API"):
+                st.json(payload)
+            try:
+                with st.spinner("Calculando o score de risco..."):
+                    result = api_request("POST", f"{api_url}/predict/features", json=payload)
+                result["customer_id"] = loaded_customer_id
+                show_result(result)
+            except RuntimeError as error:
+                st.error(str(error))
+    else:
+        st.info("Informe um código de cliente e clique em “Buscar cliente” para preencher o formulário.")
 
 with tab_customer:
     st.write("Informe um identificador existente para usar o endpoint `POST /predict/customer/{customer_id}`.")
