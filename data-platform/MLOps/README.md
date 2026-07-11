@@ -18,19 +18,80 @@ A implementação é deliberadamente acadêmica: demonstra o serving do modelo e
 ## Arquitetura do serviço
 
 ```text
-Formulário com 42 features ───────────┐
+Formulário de features ───────────────┐
                                      ├→ PredictionService → CreditPolicy → FastAPI
 PostgreSQL / application_abt → FeatureService                         │
                                                                       └→ Streamlit
 ```
 
-- `FeatureService` recupera da ABT as mesmas 42 features usadas no treinamento;
+- `FeatureService` recupera da ABT as mesmas features usadas no treinamento;
 - `PredictionService` carrega o artefato LightGBM e calcula o score;
 - `CreditPolicy` converte o score em `approve`, `manual_review` ou `reject`;
 - FastAPI expõe os contratos;
 - Streamlit oferece preenchimento manual, recuperação editável e consulta direta de clientes.
 
 O score é uma pontuação de ordenação de risco, não uma probabilidade calibrada de inadimplência.
+
+### Fluxo em camadas
+
+Cada requisição de predição atravessa camadas com **responsabilidade única** — é isso que mantém o modelo isolado da regra de negócio e da apresentação:
+
+```text
+Streamlit  (apresentação)
+   │  HTTP
+   ▼
+FastAPI    (contrato / transporte)
+   │
+   ├─ FeatureService ───→ acesso a dados: recupera as features do cliente na ABT
+   ├─ PredictionService → inferência: alinha o contrato do artefato e calcula o score
+   └─ CreditPolicy ─────→ regra de negócio: converte o score em recomendação
+```
+
+- **acesso a dados** (`feature_service`) e **inferência** (`model_service`) não conhecem regra de negócio;
+- **política** (`credit_policy`) não conhece o modelo — recebe apenas um score;
+- **transporte** (FastAPI) e **apresentação** (Streamlit) não contêm lógica de crédito.
+
+### Decisões arquiteturais
+
+- **Consistência treino ↔ inferência pela ABT.** O `feature_service` lê a **mesma** `application_abt` usada no treinamento; as features online são idênticas às offline **por construção**. A API **não re-implementa** a engenharia de atributos do pipeline, eliminando *training/serving skew*. Custo consciente: a predição por cliente depende de a ABT estar atualizada.
+- **Modelo e política desacoplados.** O modelo entrega um **score de ordenação** (estável, versionado no artefato); a **política de crédito** o traduz em recomendação por **limiares configuráveis**, que mudam sem re-treinar. Por isso `predicted_class` (limiar do modelo) e `recommendation` (política) são conceitos distintos e podem divergir.
+- **Contrato dirigido pelo artefato.** A lista de features, as categorias e o threshold viajam dentro do próprio artefato; a API valida e alinha a entrada contra esse contrato antes de pontuar. `schemas.py` formaliza o contrato HTTP e o frontend o consome — uma **fonte de verdade única** que flui de **treino → artefato → API → UI**.
+- **Dependências carregadas no startup.** Modelo e engine de banco são criados **uma vez** no `lifespan` e guardados em `app.state`; as requisições os reutilizam, sem recarregar o modelo por chamada. O pool usa `pool_pre_ping` para resiliência a conexões ociosas.
+- **Três modos de consumo sobre o mesmo núcleo.** O caminho de predição (`_predict`) é único; muda apenas a **origem das features** — fornecidas pelo consumidor, recuperadas da ABT por `sk_id_curr`, ou recuperadas e **editadas** antes de reavaliar.
+
+### Fluxo do contrato
+
+O mesmo contrato de features atravessa treino, artefato e serviço — nada é redefinido no caminho:
+
+```text
+train.py  ──→  artefato .pkl  ──→  PredictionService  ──→  /model/features  ──→  Streamlit / field_config
+(features,      (features,          (valida e alinha         (expõe o             (renderiza os
+ categorias,     categorias,         a entrada ao             contrato)             mesmos campos)
+ threshold)      threshold)          contrato)
+```
+
+## Aplicações implementadas
+
+### API FastAPI (`app/api`)
+
+Serviço de scoring que expõe o modelo como serviço de predição:
+
+- **carga no startup** — modelo e conexão de banco são inicializados uma vez (`lifespan`) e reutilizados por todas as requisições;
+- **documentação viva** — OpenAPI/Swagger em `/docs`, gerada a partir dos contratos de `schemas.py`;
+- **capacidades** — *liveness* (`/health`), metadados de features (`/model/features`), recuperação das features de um cliente (`/customers/{id}/features`) e **dois modos de predição** (por features fornecidas e por cliente armazenado na ABT);
+- **validação e erros tipados** — features obrigatórias ausentes → `422` com a lista; cliente inexistente → `404`; falha de banco → `503`; artefato inválido **impede a subida** do serviço;
+- **rastreabilidade** — cada predição é registrada em **JSON no stdout** do container (apoio a demonstração e diagnóstico; não substitui auditoria persistente);
+- **separação de decisão** — a resposta traz, junto ao score, a recomendação da política e os limiares que a produziram.
+
+### Interface Streamlit (`app/frontend`)
+
+Simulador para o analista de crédito, que **consome a API** e nunca acessa o modelo diretamente:
+
+- **barra lateral** — URL da API configurável e botão **"Verificar conexão"** (checa `/health` e se o modelo está carregado);
+- **três abas** — *Preencher todos os dados*, *Buscar cliente e editar* e *Consultar cliente do banco*;
+- **formulário dinâmico** — campos agrupados por contexto e gerados a partir de `field_config.py` (categóricos com opções controladas, flags binárias, numéricos com limites e passos);
+- **jornada de edição** — carrega as features de um cliente da ABT, permite **ajustar** os campos e reavaliar, evidenciando o efeito de mudanças no score **sem alterar a ABT**;
+- **visão do resultado** — faixa de recomendação (cor/ícone), métricas de score, classe prevista e origem, barra de posição na escala de risco, legenda com limiar e política, aviso de que o score **não é probabilidade calibrada** e os **JSONs** enviado e recebido.
 
 ## Responsabilidades e limites
 
@@ -179,7 +240,7 @@ docker compose logs -f credit-api credit-frontend
 
 ### Estrutura da requisição por features
 
-O endpoint recebe um objeto `features` com todas as 42 entradas listadas por `GET /model/features`:
+O endpoint recebe um objeto `features` com todas as entradas listadas por `GET /model/features`:
 
 ```json
 {
@@ -223,7 +284,7 @@ O Streamlit implementa três formas de demonstração:
 
 ### Preencher todos os dados
 
-Renderiza as 42 features agrupadas por contexto. Campos categóricos usam opções controladas, flags usam seleção binária e valores numéricos respeitam limites e passos definidos em `field_config.py`.
+Renderiza as features agrupadas por contexto. Campos categóricos usam opções controladas, flags usam seleção binária e valores numéricos respeitam limites e passos definidos em `field_config.py`.
 
 ### Buscar cliente e editar
 
@@ -295,6 +356,31 @@ MLOps/.venv/bin/python -m unittest discover -s MLOps/tests -v
 - a API depende da disponibilidade da ABT no PostgreSQL;
 - o artefato é empacotado na imagem e não obtido de um model registry;
 - não há monitoramento contínuo de drift, latência ou performance pós-deploy.
+
+## Próximos passos
+
+Além de calibração do score, autenticação e adoção de um *model registry*, dois eixos completam a proposta de arquitetura (itens iii e iv do escopo individual).
+
+### iii. Monitoramento em produção
+
+O objetivo é detectar **falhas, perda de performance e mudança de comportamento dos dados** antes que afetem a decisão de crédito. Como a base é **transversal (sem datas absolutas de originação)**, o monitoramento é definido por **lote de novas aplicações comparado ao baseline de treino** — e não por safra temporal, que exigiria coortes datadas inexistentes neste conjunto. Cada dimensão tem um **alerta** que aciona reavaliação ou re-treino:
+
+- **estabilidade dos dados** — PSI do score e das principais features de cada novo lote contra a população de treino (não depende de rótulos nem de datas);
+- **desempenho** — AUC/KS recalculados à medida que os desfechos (inadimplência) dos aprovados amadurecem, contra o baseline do teste;
+- **decisão** — taxa de aprovação e inadimplência observada dos aprovados por lote;
+- **calibração** — Brier / curva de calibração conforme os desfechos são observados;
+- **fairness** — desempenho e taxa de negados por subgrupo.
+
+### iv. Ações automatizadas a partir das previsões
+
+As predições podem **acionar ações** de negócio, conectando ML, automação e agentes de IA:
+
+- **roteamento automático** do pedido conforme a faixa da política (aprovação direta, fila de revisão humana, recusa justificada);
+- **priorização da fila** de análise pelos casos de maior risco/valor;
+- **agente de IA** que compõe um resumo explicável da decisão (drivers SHAP + política aplicada) para o analista;
+- **gatilho de re-treino** aberto automaticamente quando um alerta de drift ou queda de performance dispara.
+
+Essas ações permanecem **sob supervisão humana**: o modelo ordena risco e recomenda; a concessão final segue a política e a análise do analista.
 
 ## Componentes relacionados
 

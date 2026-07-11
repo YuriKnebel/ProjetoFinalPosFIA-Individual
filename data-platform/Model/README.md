@@ -4,7 +4,7 @@ Esta pasta reúne a seleção, o treinamento, a avaliação e a inferência loca
 
 ## Contexto de modelagem
 
-O target do projeto identifica clientes inadimplentes (`target = 1`). A base é fortemente desbalanceada: aproximadamente 8% dos clientes pertencem à classe positiva. Por isso, um classificador pode alcançar alta acurácia prevendo majoritariamente bons pagadores e ainda assim oferecer pouco valor para a política de crédito.
+O target do projeto identifica clientes inadimplentes (`target = 1`). A base é **fortemente desbalanceada** — a classe positiva (inadimplente) é uma minoria expressiva. Por isso, um classificador pode alcançar alta acurácia prevendo majoritariamente bons pagadores e ainda assim oferecer pouco valor para a política de crédito: **a acurácia é enganosa nesse cenário**, o que orienta toda a escolha metodológica a seguir.
 
 O objetivo da modelagem não é automatizar isoladamente a concessão de crédito. O modelo deve:
 
@@ -15,7 +15,15 @@ O objetivo da modelagem não é automatizar isoladamente a concessão de crédit
 - permitir que thresholds sejam avaliados segundo perdas, margem e capacidade operacional;
 - manter o mesmo contrato de features no treinamento e na inferência.
 
-Essa finalidade orienta a escolha de ROC AUC, Gini, KS e Average Precision como métricas centrais, complementadas por Brier, matriz de confusão, recall e métricas econômicas de corte.
+Essa finalidade orienta a **escolha das métricas de avaliação**, que priorizam **ordenação/discriminação** em vez de acurácia:
+
+- **ROC AUC** e **Gini** medem a capacidade de ordenar bons e maus **independentemente do ponto de corte**;
+- **KS** mede a separação máxima acumulada entre as distribuições de score das duas classes (padrão em *scorecards* de crédito);
+- **Average Precision (PR-AUC)** avalia a qualidade do ranking na **classe rara**, mais informativa que a acurácia sob desbalanceamento;
+- **Brier** e a curva de calibração diagnosticam o quanto o score se afasta de uma probabilidade observável;
+- **matriz de confusão, recall e métricas econômicas de corte** traduzem o modelo em decisão de negócio.
+
+Os **valores** de cada execução vivem nos notebooks e em [`artifacts/metrics.json`](./artifacts/metrics.json) — esta documentação descreve o *método*, não os números (que variam a cada re-treino).
 
 ## Modelo atual
 
@@ -45,7 +53,7 @@ O frontend e a documentação da API adotam o termo `risk_score` para preservar 
 
 ## Dados de entrada
 
-O treinamento lê `application_abt` no PostgreSQL. A tabela possui uma linha por `sk_id_curr`, target e 42 features distribuídas entre:
+O treinamento lê `application_abt` no PostgreSQL. A tabela tem **uma linha por `sk_id_curr`**, a coluna `target` e as features preditoras, distribuídas entre:
 
 | Família | Exemplos | Informação representada |
 |---|---|---|
@@ -94,20 +102,17 @@ O holdout mede generalização e não participa do ajuste final durante a compar
 | `validation` | Folds, iterações e tamanho da amostra de busca. |
 | `model_results` | Justificativa e métricas de referência da seleção. |
 
-### Hiperparâmetros oficiais
+### Estratégia de regularização (controle de overfitting)
 
-| Parâmetro | Valor | Papel principal |
-|---|---:|---|
-| `n_estimators` | 268 | Quantidade de árvores. |
-| `learning_rate` | 0.0778 | Contribuição incremental de cada árvore. |
-| `num_leaves` | 45 | Complexidade máxima das folhas. |
-| `max_depth` | 4 | Limita a profundidade das árvores. |
-| `min_child_samples` | 263 | Evita folhas apoiadas em poucos clientes. |
-| `colsample_bytree` | 0.8444 | Amostra features por árvore. |
-| `reg_lambda` | 1.0707 | Regularização L2. |
-| `class_weight` | `balanced` | Compensa o desbalanceamento no ajuste. |
+Os hiperparâmetros não foram fixados a priori: saíram da busca descrita em `validacao_modelos.ipynb`, dentro de uma faixa deliberadamente concentrada na **região regularizada**. O objetivo é um modelo que generaliza, não que memoriza o treino. A estratégia combina:
 
-Profundidade baixa, folhas com amostra mínima elevada e regularização reduzem a tendência de memorizar o conjunto de treino.
+- **árvores rasas** (profundidade máxima baixa) — limitam interações espúrias e memorização;
+- **folhas com amostra mínima elevada** — impedem que uma folha se apoie em poucos clientes;
+- **regularização L2** e **amostragem de features por árvore** — reduzem variância;
+- **taxa de aprendizado baixa** com número de árvores compatível — ganho incremental e estável;
+- **`class_weight="balanced"`** — compensa o desbalanceamento no ajuste.
+
+Os **valores exatos** de cada hiperparâmetro ficam em [`config_model.json`](./config_model.json) (`parameters.classifier.hyperparameters`), como fonte única — assim não divergem da documentação a cada re-tunagem.
 
 ## Estrutura
 
@@ -123,29 +128,21 @@ Profundidade baixa, folhas com amostra mínima elevada e regularização reduzem
 
 ## Notebooks
 
-### [`validacao_modelos.ipynb`](./validacao_modelos.ipynb)
+Os notebooks concentram as **decisões metodológicas** da modelagem. Este README descreve a **abordagem** de cada um — o que analisa, o que busca estabelecer, com que método e que artefatos produz; os **resultados numéricos** permanecem nos próprios notebooks.
 
-Compara Regressão Logística, Random Forest, XGBoost e LightGBM usando validação cruzada estratificada, busca de hiperparâmetros e comparação entre treino, validação interna e teste externo.
+### [`validacao_modelos.ipynb`](./validacao_modelos.ipynb) — seleção do modelo
 
-Principais perguntas respondidas:
+- **O que analisa:** um conjunto **curado de quatro famílias** — linear regularizado (Logística L2), *bagging* (Random Forest) e *boosting* (XGBoost e LightGBM) — sobre a ABT, cobrindo as abordagens relevantes para dados tabulares de crédito, em vez de testar muitos algoritmos redundantes.
+- **O que busca estabelecer:** qual família e configuração entregam o melhor **poder de ordenação** com **overfitting controlado**, e quais hiperparâmetros alimentam o treinamento oficial.
+- **Método:** busca de hiperparâmetros por `RandomizedSearchCV` com **validação cruzada estratificada**, medindo cada configuração em **três frentes — treino × teste interno (CV) × teste externo (holdout)** para diagnosticar overfitting sem depender de uma única partição; um **filtro de overfitting** descarta configurações que caem demais do treino para o teste; o modelo escolhido é **retreinado no conjunto de treino completo**. Nesta comparação **todas as famílias** usam padronização + *one-hot* (inclusive o campeão); é o **treinamento oficial** (`train.py`, avaliado em `evaluation.ipynb`) que adota as **categóricas nativas** do LightGBM, com os hiperparâmetros aqui selecionados.
+- **Dados que cria e apresenta:** tabela de comparação treino/CV/externo por configuração, ranking pós-filtro de overfitting, importância nativa (contagem de *splits*) do modelo final e curvas/decis do candidato.
 
-- qual família de algoritmo oferece o melhor ranking de risco;
-- quais configurações apresentam overfitting aceitável;
-- se o resultado interno se mantém no holdout;
-- quais hiperparâmetros devem alimentar o treinamento oficial.
+### [`evaluation.ipynb`](./evaluation.ipynb) — avaliação do modelo escolhido
 
-### [`evaluation.ipynb`](./evaluation.ipynb)
-
-Avalia exclusivamente o modelo selecionado. Inclui métricas de crédito, curvas, decis, análise econômica de threshold, importância por permutação, SHAP, fairness e proposta de monitoramento.
-
-Principais perguntas respondidas:
-
-- qual a capacidade de discriminação no teste externo;
-- onde os inadimplentes se concentram ao longo dos decis;
-- como diferentes thresholds alteram aprovação, captura e valor esperado;
-- quais features movem o score e em qual direção;
-- se há diferenças relevantes de desempenho e decisão entre subgrupos;
-- quais métricas devem ser acompanhadas após o deploy.
+- **O que analisa:** exclusivamente o **modelo desenvolvido** (LightGBM regularizado, categóricas nativas), reproduzindo a lógica de `train.py` (mesmo split e mesma semente).
+- **O que busca estabelecer:** se o modelo **generaliza** de forma honesta e pode virar política de crédito, quais variáveis o sustentam e como monitorá-lo — a defesa de *por que se pode confiar na solução*.
+- **Método:** medição no **holdout** (e não no artefato retreinado em 100% da base, que seria vazamento); métricas de crédito; leitura de negócio por **decis/lift** e **varredura de threshold**; escolha de corte por **valor esperado** (premissas de margem e LGD) com **análise de sensibilidade**, comparada a baselines estatísticos (Youden/KS, F1, G-mean, MCC); **interpretabilidade** por importância de permutação e SHAP; **governança/fairness** por subgrupo e **plano de monitoramento**.
+- **Dados que cria e apresenta:** curvas ROC e Precision-Recall, matriz de confusão, distribuição de score por classe e curva de calibração, tabela de decis/lift, tabela de operação por threshold, ranking de permutação e *beeswarm* SHAP, tabelas de desempenho/decisão por subgrupo e a tabela de métricas de monitoramento.
 
 Os notebooks podem ser executados pelo ambiente descrito em [Jupyter](../jupyter/README.md).
 
@@ -181,7 +178,7 @@ O treinamento oficial também é a última etapa da DAG `pipeline_orchestration`
 
 1. Carrega e valida as seções obrigatórias da configuração.
 2. Consulta a ABT no PostgreSQL.
-3. Seleciona as 42 features e converte as categóricas.
+3. Seleciona as features de entrada configuradas e converte as categóricas.
 4. Cria holdout estratificado para avaliação da configuração.
 5. Treina o modelo de avaliação e calcula AUC, Gini, KS, Average Precision e Brier.
 6. Gera relatório de classificação no threshold configurado.
@@ -227,19 +224,17 @@ O Pickle oficial é um dicionário com os elementos necessários para que outro 
 
 A API aceita `features` e normaliza internamente esse nome para `input_features`, preservando compatibilidade com artefatos anteriores.
 
-## Resultados do artefato atual
+## Como estabelecemos confiança no modelo
 
-O arquivo [`metrics.json`](./artifacts/metrics.json) registra:
+Em vez de fixar números aqui (que mudam a cada re-treino), a confiabilidade da solução é sustentada por **método**:
 
-| Métrica | Valor | Leitura |
-|---|---:|---|
-| ROC AUC | 0.7650 | Capacidade geral de ordenar bons e maus clientes. |
-| Gini | 0.5300 | Transformação do AUC usada em crédito. |
-| KS | 0.4051 | Separação máxima acumulada entre as classes. |
-| Average Precision | 0.2563 | Qualidade do ranking da classe rara. |
-| Brier | 0.1909 | Erro probabilístico; reforça a necessidade de calibração. |
+- **Holdout honesto:** o desempenho é medido em um conjunto estratificado **nunca visto** no ajuste; avaliar o artefato final (retreinado em 100% da base) sobre esse conjunto seria vazamento.
+- **Consistência teste × validação:** o desempenho no holdout é confrontado com o da validação cruzada — a proximidade entre os dois é a evidência de **ausência de overfitting escondido**.
+- **Métricas de crédito, não acurácia:** AUC/Gini/KS/PR-AUC medem ordenação sob desbalanceamento; a calibração é inspecionada para deixar explícito que o score é **ranking de risco, não probabilidade calibrada**.
+- **Coerência EDA → poder preditivo → modelo:** as variáveis mais importantes (permutação/SHAP) coincidem com as apontadas pela EDA e têm sentido de negócio — argumento contra vazamento.
+- **Governança:** desempenho e decisão por subgrupo e um plano de monitoramento (desempenho, estabilidade dos dados/PSI, calibração, fairness) fecham o critério de rastreabilidade e conformidade.
 
-Essas métricas descrevem a execução persistida em `metrics.json`. Resultados de notebooks podem representar outros estágios de seleção ou execuções anteriores e devem ser interpretados no contexto indicado por cada análise.
+Os **valores** de cada execução ficam em [`artifacts/metrics.json`](./artifacts/metrics.json) e nos notebooks, sempre no contexto da execução que os produziu — os notebooks podem refletir estágios de seleção ou execuções distintas do artefato oficial.
 
 ## Thresholds e política de crédito
 

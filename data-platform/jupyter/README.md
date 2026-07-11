@@ -64,24 +64,28 @@ No container, os diretórios são montados em:
 
 ### Pipeline de dados
 
-- [`exp_analysis_raw.ipynb`](../DataPipeline/exp_analysis_raw.ipynb): análise exploratória dos dados brutos, incluindo qualidade, valores ausentes, distribuição do alvo e sinais iniciais.
-- [`exp_analysis_abt.ipynb`](../DataPipeline/exp_analysis_abt.ipynb): análise da ABT tratada, incluindo integridade, força preditiva, multicolinearidade e fairness.
+- [`exp_analysis_raw.ipynb`](../DataPipeline/exp_analysis_raw.ipynb): **diagnostica as fontes brutas** (qualidade, ausências, anomalias, cardinalidade, desbalanceamento) e mede o poder preditivo de cada variável para **decidir** os tratamentos de sanitização e as features da ABT.
+- [`exp_analysis_abt.ipynb`](../DataPipeline/exp_analysis_abt.ipynb): **valida a ABT tratada** (integridade, redundâncias removidas, força preditiva, multicolinearidade) e sinaliza atributos sensíveis para governança.
 
 ### Modelagem
 
-- [`validacao_modelos.ipynb`](../Model/validacao_modelos.ipynb): compara os algoritmos, executa a busca de hiperparâmetros e avalia overfitting.
-- [`evaluation.ipynb`](../Model/evaluation.ipynb): avalia o LightGBM selecionado, política de corte, interpretabilidade, fairness e métricas de monitoramento.
+- [`validacao_modelos.ipynb`](../Model/validacao_modelos.ipynb): **seleciona o modelo** — compara as famílias de algoritmos sob o mesmo split, com busca de hiperparâmetros e critério de overfitting (treino × CV × teste externo).
+- [`evaluation.ipynb`](../Model/evaluation.ipynb): **avalia o modelo escolhido** no holdout — política de corte por valor esperado, interpretabilidade (permutação/SHAP), fairness e plano de monitoramento.
 
 ## Sequência recomendada
 
+Os notebooks leem do PostgreSQL — inclusive o de dados brutos, que consulta as tabelas de origem (`application_train`, `bureau`, `previous_application`, `installments_payments`). Por isso o **pipeline precisa ter ingerido as fontes (e materializado a ABT) antes** de abri-los.
+
 ```text
-exp_analysis_raw.ipynb
-  → pipeline_orchestration materializa application_abt
-  → exp_analysis_abt.ipynb
-  → validacao_modelos.ipynb
-  → config_model.json + train.py
-  → evaluation.ipynb
+pipeline_orchestration  (ingere as fontes brutas → materializa application_abt → treina o modelo)
+  → exp_analysis_raw.ipynb          (analisa as tabelas brutas no Postgres)
+  → exp_analysis_abt.ipynb          (valida a ABT materializada)
+  → validacao_modelos.ipynb         (compara e seleciona o modelo)
+  → config_model.json + train.py    (registra a seleção e retreina o modelo oficial)
+  → evaluation.ipynb                (avalia o modelo desenvolvido)
 ```
+
+> As decisões de EDA sobre os dados brutos justificam as regras de `data_sanitization.py` e `abt_transform.py`; ao alterá-las, reexecute o pipeline para reconstruir a ABT antes de seguir para a modelagem.
 
 ### 1. Dados brutos
 

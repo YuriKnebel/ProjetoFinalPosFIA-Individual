@@ -6,7 +6,7 @@ O caso utiliza os dados da competição [Home Credit Default Risk](https://www.k
 
 ## Contexto e objetivos da plataforma
 
-Uma decisão de crédito precisa equilibrar dois erros com impactos distintos: aprovar um cliente que se tornará inadimplente e recusar um cliente que pagaria corretamente. Como a classe inadimplente representa aproximadamente 8% da base, acurácia isolada não é suficiente para avaliar a solução. A plataforma foi desenhada para transformar múltiplos históricos relacionais em um sinal de risco reproduzível, interpretável e consumível por uma aplicação.
+Uma decisão de crédito precisa equilibrar dois erros com impactos distintos: aprovar um cliente que se tornará inadimplente e recusar um cliente que pagaria corretamente. Como a classe inadimplente é uma minoria expressiva da base, a acurácia isolada não é suficiente para avaliar a solução. A plataforma foi desenhada para transformar múltiplos históricos relacionais em um sinal de risco reproduzível, interpretável e consumível por uma aplicação.
 
 Os objetivos arquiteturais são:
 
@@ -111,7 +111,7 @@ airflow/data/csv
 1. Os CSVs são colocados em `airflow/data/csv`.
 2. A DAG carrega as quatro fontes no banco `data`.
 3. O pipeline cria tabelas tratadas e agregações por `sk_id_curr`.
-4. A tabela `application_abt` consolida 42 features e uma linha por cliente.
+4. A tabela `application_abt` consolida as features preditoras em uma linha por cliente.
 5. O treinamento selecionado gera `Model/artifacts/lightgbm_abt.pkl` e `metrics.json`.
 6. A API carrega o artefato e consulta a ABT quando recebe um identificador de cliente.
 7. A política transforma o score em aprovação, revisão manual ou rejeição demonstrativa.
@@ -138,7 +138,7 @@ O pipeline pode ser reexecutado para reconstruir as tabelas derivadas e atualiza
 
 ### Features fornecidas
 
-O consumidor envia as 42 features para `POST /predict/features`. A API alinha tipos e ordem, calcula o score e aplica a política configurada.
+O consumidor envia as features esperadas (listadas por `GET /model/features`) para `POST /predict/features`. A API alinha tipos e ordem, calcula o score e aplica a política configurada.
 
 ### Cliente armazenado
 

@@ -6,7 +6,7 @@ Os dados são baseados na competição [Home Credit Default Risk](https://www.ka
 
 ## O desafio
 
-Decidir crédito envolve dois custos opostos: a perda causada por clientes inadimplentes e a receita perdida quando bons clientes são recusados. Na base utilizada, somente cerca de 8% dos clientes pertencem à classe inadimplente. Esse desbalanceamento torna inadequado avaliar a solução apenas por acurácia e exige um fluxo que conecte engenharia de dados, modelagem, interpretabilidade e política de decisão.
+Decidir crédito envolve dois custos opostos: a perda causada por clientes inadimplentes e a receita perdida quando bons clientes são recusados. Na base utilizada, a classe inadimplente é uma **minoria expressiva** — um desbalanceamento forte que torna inadequado avaliar a solução apenas por acurácia e exige um fluxo que conecte engenharia de dados, modelagem, interpretabilidade e política de decisão.
 
 O projeto foi construído como uma solução integrada, e não apenas como um experimento de notebook. Quatro fontes históricas são carregadas e transformadas, relações um-para-muitos são consolidadas em uma ABT, diferentes algoritmos são comparados e o modelo selecionado é disponibilizado por serviço e interface web.
 
@@ -17,7 +17,7 @@ Produzir um score de propensão à inadimplência que ajude a priorizar clientes
 ## O que foi entregue
 
 - pipeline ELT em PostgreSQL para quatro fontes do Home Credit;
-- ABT com uma linha por cliente e 42 features;
+- ABT com uma linha por cliente, consolidando cadastro, bureau, propostas e parcelas;
 - EDA das fontes brutas e da base tratada;
 - comparação entre Regressão Logística, Random Forest, XGBoost e LightGBM;
 - controle de overfitting com validação cruzada e teste externo;
@@ -45,29 +45,27 @@ A implementação completa e o desenho arquitetural estão documentados em [data
 
 ## Resumo da metodologia utilizada
 
-1. Exploração das fontes e do problema de desbalanceamento.
-2. Limpeza, padronização e engenharia de atributos.
-3. Consolidação de cadastro, bureau, propostas e parcelas em uma ABT.
-4. Comparação entre modelos com validação cruzada e controle de overfitting.
-5. Seleção de um LightGBM com categóricas nativas.
-6. Avaliação em holdout, análise econômica de threshold e interpretabilidade.
-7. Persistência do artefato e disponibilização por API e interface web.
+O projeto segue o método **CRISP-DM**, com ênfase na *justificativa* de cada escolha:
 
-O score retornado pelo modelo deve ser tratado como uma pontuação de propensão para ordenação de risco, não como probabilidade calibrada.
+1. **Entendimento dos dados (EDA em duas etapas):** diagnóstico das fontes brutas para decidir tratamentos e, depois do pipeline, validação da base limpa. A força de cada variável é **medida** (Pearson, Cramér's V, WOE/IV) e a redundância é checada por multicolinearidade — não presumida.
+2. **Preparação:** limpeza e engenharia por **regras** (imputação por mediana em variáveis assimétricas, winsorização de outliers, isolamento de anomalias em flags, condensação de categorias raras) e consolidação das relações um-para-muitos em uma **ABT** de uma linha por cliente, com **flags de presença** que separam "sem histórico" de "histórico observado".
+3. **Modelagem:** comparação **curada** de quatro famílias (linear regularizado, *bagging*, dois *boostings*) por busca de hiperparâmetros com validação cruzada estratificada, medindo **treino × CV × teste externo** e aplicando um **filtro de overfitting**; o LightGBM é selecionado, usa **categóricas nativas** e o artefato final é retreinado com toda a ABT.
+4. **Avaliação:** medição em **holdout honesto** com métricas de crédito (AUC/KS/Gini/PR-AUC), leitura de negócio por **decis** e **threshold como decisão econômica** (valor esperado, com análise de sensibilidade), **interpretabilidade** (permutação + SHAP) e **governança/fairness** com plano de monitoramento.
+5. **Implantação:** persistência do artefato reprodutível e disponibilização por API e interface web, com a **política de crédito separada do modelo**.
 
-## Resultados principais
+O score retornado pelo modelo deve ser tratado como uma **pontuação de ordenação de risco, não como probabilidade calibrada**.
 
-O artefato LightGBM atual registra:
+## Por que confiar na solução
 
-| Métrica | Resultado |
-|---|---:|
-| ROC AUC | 0.7650 |
-| Gini | 0.5300 |
-| KS | 0.4051 |
-| Average Precision | 0.2563 |
-| Brier | 0.1909 |
+Em vez de fixar números que mudam a cada re-treino, a confiança na solução se apoia em **método**:
 
-Os resultados mostram poder de ordenação útil para triagem de risco. O Brier e a curva de calibração, porém, indicam que o score não deve ser comunicado como probabilidade real sem uma etapa adicional de calibração.
+- **holdout honesto** e **consistência teste × validação cruzada** como evidência de generalização (sem overfitting escondido);
+- **métricas de ordenação** adequadas ao desbalanceamento (AUC/Gini/KS/PR-AUC), em vez de acurácia;
+- **coerência EDA → poder preditivo → modelo** (permutação/SHAP) como argumento contra vazamento;
+- reconhecimento explícito de que o score é **ranking de risco, não probabilidade calibrada** (a calibração fica registrada como próximo passo);
+- **governança** por subgrupo e um **plano de monitoramento** (desempenho, estabilidade/PSI, calibração, fairness).
+
+Os **valores** de cada execução ficam nos notebooks e em `Model/artifacts/metrics.json`, no contexto da execução que os produziu.
 
 ## Implementações críticas
 
