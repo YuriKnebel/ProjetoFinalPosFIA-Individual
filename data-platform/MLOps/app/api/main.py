@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+import json
 
 from fastapi import FastAPI, HTTPException, Request
 from sqlalchemy import create_engine
@@ -10,6 +11,7 @@ from .credit_policy import CreditPolicy
 from .feature_service import CustomerFeatureService, CustomerNotFoundError
 from .model_service import ModelInputError, PredictionService
 from .schemas import (
+    CustomerFeaturesResponse,
     FeaturePredictionRequest,
     HealthResponse,
     PredictionResponse,
@@ -67,10 +69,31 @@ def model_features(request: Request) -> list[str]:
     return service.expected_features
 
 
+@app.get("/customers/{customer_id}/features", response_model=CustomerFeaturesResponse)
+def customer_features(customer_id: int, request: Request) -> CustomerFeaturesResponse:
+    feature_service: CustomerFeatureService = request.app.state.feature_service
+
+    try:
+        features = feature_service.build(customer_id)
+    except CustomerNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except SQLAlchemyError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível consultar as fontes de dados do cliente.",
+        ) from error
+
+    return CustomerFeaturesResponse(customer_id=customer_id, features=features)
+
+
 @app.post("/predict/features", response_model=PredictionResponse)
 def predict_from_features(
     payload: FeaturePredictionRequest, request: Request
 ) -> PredictionResponse:
+    _log_request_json(
+        "POST /predict/features",
+        {"features": payload.features},
+    )
     return _predict(
         features=payload.features,
         source="provided_features",
@@ -92,11 +115,23 @@ def predict_from_database(customer_id: int, request: Request) -> PredictionRespo
             detail="Não foi possível consultar as fontes de dados do cliente.",
         ) from error
 
+    _log_request_json(
+        f"POST /predict/customer/{customer_id}",
+        {"customer_id": customer_id, "features": features},
+    )
     return _predict(
         features=features,
         source="database",
         customer_id=customer_id,
         request=request,
+    )
+
+
+def _log_request_json(endpoint: str, payload: dict) -> None:
+    print(
+        f"Request JSON {endpoint}: "
+        f"{json.dumps(payload, ensure_ascii=False, default=str)}",
+        flush=True,
     )
 
 

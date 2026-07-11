@@ -9,6 +9,13 @@ class FeaturePredictionRequest(BaseModel):
     )
 
 
+class CustomerFeaturesResponse(BaseModel):
+    customer_id: int
+    features: dict[str, Any] = Field(
+        description="Features recuperadas do banco para preenchimento do formulário."
+    )
+
+
 class CreditPolicyResult(BaseModel):
     recommendation: Literal["approve", "manual_review", "reject"]
     reason: str
