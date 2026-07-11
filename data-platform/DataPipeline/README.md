@@ -51,8 +51,10 @@ A execução completa é coordenada pela DAG descrita no [README do Airflow](../
 | [`data_sanitization.py`](./data_sanitization.py) | Aplica limpeza e padronização por SQL. |
 | [`data_sanitization_index.py`](./data_sanitization_index.py) | Recria índices nas tabelas tratadas. |
 | [`abt_transform.py`](./abt_transform.py) | Agrega históricos e constrói a ABT. |
+| [`export_data.py`](./export_data.py) | Utilitário manual para exportar tabelas do PostgreSQL como arquivos CSV de entrega. |
 | [`utils.py`](./utils.py) | Centraliza conexões, carga e utilitários compartilhados. |
 | [`config_pipeline.json`](./config_pipeline.json) | Define fontes, tabelas, chunks, índices e parâmetros de limpeza. |
+| [`requirements.txt`](./requirements.txt) | Dependências para executar os scripts do pipeline fora do Airflow. |
 | [`abt_fields.txt`](./abt_fields.txt) | Inventário textual dos campos da ABT. |
 | [`df_correlations_with_target.txt`](./df_correlations_with_target.txt) | Registro auxiliar das correlações com o alvo. |
 
@@ -232,6 +234,69 @@ Os notebooks **aplicam** a metodologia acima; os resultados numéricos ficam nel
 
 Os notebooks podem ser abertos pelo ambiente descrito em [Jupyter](../jupyter/README.md).
 
+## Exportação de tabelas para CSV
+
+[`export_data.py`](./export_data.py) é um **utilitário de execução manual** para preparar os arquivos CSV exigidos na entrega acadêmica a partir de tabelas já existentes no banco PostgreSQL `data`. Ele não integra a DAG, não é executado automaticamente pelo Airflow e não faz parte do processamento operacional recorrente.
+
+O pipeline continua responsável por ingerir, tratar e materializar as tabelas no PostgreSQL. Depois que essas etapas estiverem concluídas, o responsável pela entrega executa o script sob demanda para transportar uma tabela do banco para um arquivo CSV, sem duplicar as regras de ingestão, limpeza ou construção da ABT.
+
+A função `run_postgres_to_csv_export` recebe três parâmetros:
+
+| Parâmetro | Finalidade |
+|---|---|
+| `conn_id` | Identificador mantido pelo utilitário de conexão compartilhado. Na execução manual local, `utils.py` utiliza o PostgreSQL em `localhost:5432/data`. |
+| `source_table` | Nome da tabela que será exportada. |
+| `output_dir_path` | Diretório de destino. O nome final é montado como `<source_table>.csv`. |
+
+Antes da exportação, o script registra a quantidade de linhas da tabela. Em seguida, utiliza `COPY TO STDOUT WITH CSV HEADER`, fazendo o PostgreSQL transmitir os registros diretamente para o arquivo. Essa estratégia evita montar um `DataFrame` com toda a tabela em memória e é adequada para a volumetria da ABT.
+
+### Preparação do ambiente local
+
+Execute os comandos a partir da raiz do repositório:
+
+```bash
+python3 -m venv data-platform/DataPipeline/.venv
+data-platform/DataPipeline/.venv/bin/python -m pip install \
+  -r data-platform/DataPipeline/requirements.txt
+```
+
+O PostgreSQL deve estar ativo, o banco `data` deve estar acessível pela porta local `5432` e a tabela a ser exportada deve ter sido previamente materializada pelo pipeline. Para iniciar somente o banco:
+
+```bash
+docker compose -f data-platform/docker-compose.yml up -d postgres
+```
+
+### Execução manual
+
+```bash
+data-platform/DataPipeline/.venv/bin/python \
+  data-platform/DataPipeline/export_data.py
+```
+
+Na configuração atual do bloco `__main__`, o comando exporta `application_abt` para:
+
+```text
+data-platform/data/application_abt.csv
+```
+
+O caminho é relativo ao diretório em que o comando é executado. Por isso, o exemplo acima parte da raiz do repositório.
+
+### Exportação de outra tabela
+
+O script expõe uma função reutilizável para chamadas manuais em outro módulo Python:
+
+```python
+from export_data import run_postgres_to_csv_export
+
+run_postgres_to_csv_export(
+    conn_id="postgres_data_db",
+    source_table="application_clean",
+    output_dir_path="./data-platform/Dados",
+)
+```
+
+Esse exemplo gera `data-platform/Dados/application_clean.csv`. Atualmente o script exporta uma tabela por chamada e usa o próprio nome da tabela como nome do arquivo; nomes específicos de entrega, como `clean_data.csv`, exigem uma etapa posterior de renomeação ou uma evolução do contrato da função.
+
 ## Execução
 
 O caminho recomendado é iniciar PostgreSQL e Airflow e disparar a DAG `pipeline_orchestration`:
@@ -248,8 +313,9 @@ Depois, acesse http://localhost:8080, localize `pipeline_orchestration` e inicie
 - tabelas brutas no banco `data`;
 - tabelas tratadas com sufixo `_clean`;
 - agregações temporárias por cliente;
-- ABT `application_abt`;
-- arquivo local [`abt.csv`](./abt.csv), quando materializado pelos fluxos de análise.
+- ABT `application_abt`.
+
+Os arquivos CSV de entrega não fazem parte das saídas automáticas da DAG. Eles são produzidos posteriormente, sob demanda, pelo utilitário manual [`export_data.py`](./export_data.py).
 
 ## Observabilidade do processamento
 

@@ -262,6 +262,14 @@ docker compose up -d --build postgres credit-api credit-frontend
 
 Detalhes das tarefas, pools e entradas estão no [README do Airflow](./airflow/README.md).
 
+## Preparação manual dos CSVs de entrega
+
+O componente `DataPipeline` inclui o utilitário [`export_data.py`](./DataPipeline/export_data.py), executado manualmente para preparar os CSVs da entrega acadêmica. Ele exporta tabelas já materializadas no PostgreSQL por meio de `COPY TO STDOUT`, sem carregar a tabela completa na memória.
+
+O utilitário não integra a DAG e não altera o fluxo operacional da plataforma. Sua execução ocorre somente depois que o pipeline tiver criado as tabelas que serão entregues.
+
+As dependências, os pré-requisitos, o comando de execução e a forma de selecionar a tabela de origem estão documentados na seção [Exportação de tabelas para CSV](./DataPipeline/README.md#exportação-de-tabelas-para-csv).
+
 ## Notebooks oficiais
 
 | Notebook | Finalidade |
