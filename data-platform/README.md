@@ -1,209 +1,292 @@
-# Predição de risco de crédito — Projeto Final FIA Labdata
+# Plataforma de dados e MLOps para risco de crédito
 
-Projeto final da pós-graduação em Engenharia de Dados da FIA Labdata. A solução
-constrói uma base analítica de clientes, treina um modelo de classificação para
-risco de inadimplência e disponibiliza o score por script, API e interface web.
+Esta pasta implementa a arquitetura completa do projeto: ingestão e transformação dos dados, exploração analítica, treinamento do modelo e disponibilização do score por API e interface web.
 
-Os dados são baseados na competição
-[Home Credit Default Risk](https://www.kaggle.com/competitions/home-credit-default-risk/overview).
+O caso utiliza os dados da competição [Home Credit Default Risk](https://www.kaggle.com/competitions/home-credit-default-risk/overview) para construir um score de propensão à inadimplência. O score ordena clientes por risco e apoia a política de crédito; ele não substitui regras cadastrais, prevenção a fraude, capacidade de pagamento ou revisão humana.
 
-## Objetivo de negócio
+## Contexto e objetivos da plataforma
 
-Apoiar a análise de crédito com um sinal consistente de risco, reduzindo perdas
-por inadimplência sem recusar indiscriminadamente clientes adimplentes. O modelo
-ordena os clientes por risco; a decisão final continua separada em uma política
-de crédito, sujeita a regras cadastrais, fraude, capacidade financeira e revisão
-humana.
+Uma decisão de crédito precisa equilibrar dois erros com impactos distintos: aprovar um cliente que se tornará inadimplente e recusar um cliente que pagaria corretamente. Como a classe inadimplente representa aproximadamente 8% da base, acurácia isolada não é suficiente para avaliar a solução. A plataforma foi desenhada para transformar múltiplos históricos relacionais em um sinal de risco reproduzível, interpretável e consumível por uma aplicação.
 
-## Metodologia
+Os objetivos arquiteturais são:
 
-1. Ingestão dos CSVs no PostgreSQL por DAG do Apache Airflow.
-2. Limpeza e padronização em lotes, preservando os dados brutos.
-3. Construção da ABT, com uma linha por cliente e histórico consolidado.
-4. Análise exploratória dos dados limpos.
-5. Separação estratificada entre treino e teste.
-6. Pipeline de imputação, padronização, one-hot encoding e regressão logística.
-7. Otimização por `GridSearchCV`, usando ROC AUC e validação cruzada.
-8. Avaliação em teste isolado e análise de interpretabilidade por coeficientes.
-9. Persistência do pré-processamento e do modelo em um único artefato Pickle.
+- **reprodutibilidade:** dados, transformações, features e hiperparâmetros possuem fontes de configuração identificáveis;
+- **separação de responsabilidades:** pipeline, modelo, serviço de inferência e política de crédito evoluem em componentes distintos;
+- **consistência entre treino e inferência:** API e treinamento utilizam a mesma ABT e o mesmo contrato de features;
+- **processamento eficiente:** joins e agregações de grande volume são executados no PostgreSQL;
+- **rastreabilidade acadêmica:** notebooks registram exploração, seleção, avaliação, interpretabilidade e critérios de negócio;
+- **portabilidade local:** toda a infraestrutura necessária pode ser iniciada com Docker Compose;
+- **decisão humana preservada:** o score apoia a política, sem automatizar sozinho a concessão de crédito.
 
-## Estrutura exigida pelo item C
+## Escopo funcional
+
+A plataforma cobre dois ciclos complementares:
+
+1. **Ciclo de desenvolvimento e treinamento:** ingestão das fontes, preparação da ABT, análise, comparação de modelos, treinamento e persistência do artefato.
+2. **Ciclo de inferência:** recuperação ou fornecimento das features, cálculo do score, aplicação da política demonstrativa e apresentação do resultado.
+
+Monitoramento contínuo, registry de modelos, autenticação e implantação produtiva estão descritos como próximos passos; não fazem parte da implementação atual.
+
+## Arquitetura
 
 ```text
-ProjetoFinalPosFIA/
-├── README.md
-└── data-platform/
-    ├── Dados/
-    │   ├── raw_data.csv         # materializado localmente; não versionado
-    │   ├── clean_data.csv       # materializado localmente; não versionado
-    │   ├── abt.csv              # materializado localmente; não versionado
-    │   └── materialize.py
-    ├── DataPipeline/
-    │   ├── data_sanitization.py
-    │   ├── abt_transform.py
-    │   ├── exp_analysis.ipynb
-    │   └── config_pipeline.json # variáveis, parâmetros e metadados
-    ├── Model/
-    │   ├── train.py
-    │   ├── evaluation.ipynb
-    │   ├── predict.py
-    │   ├── config_model.json    # variáveis, parâmetros e metadados
-    │   └── artifacts/
-    ├── MLOps/                   # app, testes, Dockerfiles e orquestração
-    ├── docker-compose.yml
-    └── requirements.txt
+Arquivos Home Credit
+        │
+        ▼
+airflow/data/csv
+        │
+        ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Airflow: pipeline_orchestration                              │
+│ ingestão → limpeza → agregações → ABT → treinamento          │
+└───────────────────────────────┬──────────────────────────────┘
+                                │
+                    ┌───────────▼───────────┐
+                    │ PostgreSQL            │
+                    │ raw, clean e ABT      │
+                    └───────┬─────────┬─────┘
+                            │         │
+                    ┌───────▼───┐ ┌───▼────────────────┐
+                    │ Jupyter   │ │ Modelo LightGBM    │
+                    │ EDA       │ │ artefato + métricas│
+                    └───────────┘ └─────────┬──────────┘
+                                           │
+                              ┌────────────▼────────────┐
+                              │ FastAPI + política      │
+                              └────────────┬────────────┘
+                                           │
+                                      ┌────▼─────┐
+                                      │Streamlit │
+                                      └──────────┘
 ```
 
-Os CSVs completos têm dezenas ou centenas de megabytes e são ignorados pelo
-Git. [Dados/README.md](data-platform/Dados/README.md) documenta sua origem e
-reprodução.
+### Decisões arquiteturais principais
 
-## Configuração do ambiente
+- **ELT no PostgreSQL:** limpeza, agregações e joins são executados próximos aos dados.
+- **Airflow como orquestrador:** a DAG coordena funções mantidas nas pastas de pipeline e modelo.
+- **Configuração separada do código:** tabelas, features e hiperparâmetros ficam em arquivos JSON.
+- **Artefato único de inferência:** o LightGBM e seus metadados são persistidos para consumo pela API.
+- **Modelo e política desacoplados:** o modelo gera score; a política converte faixas em recomendações.
+- **Duas formas de consumo:** predição por features fornecidas ou por cliente recuperado da ABT.
 
-Na raiz do repositório:
+## Camadas lógicas
+
+| Camada | Artefatos principais | Papel na solução |
+|---|---|---|
+| Origem | CSVs do Home Credit | Dados cadastrais e históricos usados pelo estudo. |
+| Persistência bruta | `application_train`, `previous_application`, `bureau`, `installments_payments` | Preserva as fontes carregadas antes das regras analíticas. |
+| Tratamento | tabelas com sufixo `_clean` | Padroniza categorias, ausências, anomalias e valores financeiros. |
+| Agregação | tabelas temporárias por `sk_id_curr` | Converte relações um-para-muitos em features por cliente. |
+| Analítica | `application_abt` | Contrato tabular compartilhado entre análise, treinamento e inferência. |
+| Modelagem | `config_model.json`, notebooks, `train.py` | Seleciona, avalia e treina o LightGBM. |
+| Artefatos | `lightgbm_abt.pkl`, `metrics.json` | Transporta modelo, categorias, features e metadados para inferência. |
+| Serving | FastAPI e política de crédito | Expõe o score e converte faixas em recomendações. |
+| Experiência | Streamlit | Permite demonstrar preenchimento, recuperação e consulta de clientes. |
+
+## Topologia de execução
+
+| Serviço do Compose | Imagem ou build | Dependência principal | Papel |
+|---|---|---|---|
+| `postgres` | `postgres:15` | volume `pgdata` | Bancos `airflow` e `data`. |
+| `airflow-init` | `airflow/` | PostgreSQL saudável | Migração, usuário, pools e permissões. |
+| `airflow-webserver` | `airflow/` | inicialização concluída | Interface e API do Airflow. |
+| `airflow-scheduler` | `airflow/` | inicialização concluída | Agendamento e execução das tarefas. |
+| `jupyter` | `jupyter/` | PostgreSQL | Ambiente de exploração e modelagem. |
+| `credit-api` | `MLOps/Dockerfile.api` | PostgreSQL e artefato | Inferência e política de crédito. |
+| `credit-frontend` | `MLOps/Dockerfile.frontend` | API | Interface demonstrativa. |
+
+## Componentes
+
+| Componente | Responsabilidade | Documentação |
+|---|---|---|
+| PostgreSQL | Persistência das fontes, tabelas tratadas e ABT | [postgres/README.md](./postgres/README.md) |
+| Airflow | Orquestração ponta a ponta do pipeline | [airflow/README.md](./airflow/README.md) |
+| DataPipeline | Ingestão, limpeza, agregações e ABT | [DataPipeline/README.md](./DataPipeline/README.md) |
+| Jupyter | Ambiente dos notebooks de análise e modelagem | [jupyter/README.md](./jupyter/README.md) |
+| Model | Seleção, treinamento, avaliação e inferência local | [Model/README.md](./Model/README.md) |
+| MLOps | API, política de crédito, frontend e testes | [MLOps/README.md](./MLOps/README.md) |
+
+## Fluxo de dados e modelo
+
+1. Os CSVs são colocados em `airflow/data/csv`.
+2. A DAG carrega as quatro fontes no banco `data`.
+3. O pipeline cria tabelas tratadas e agregações por `sk_id_curr`.
+4. A tabela `application_abt` consolida 42 features e uma linha por cliente.
+5. O treinamento selecionado gera `Model/artifacts/lightgbm_abt.pkl` e `metrics.json`.
+6. A API carrega o artefato e consulta a ABT quando recebe um identificador de cliente.
+7. A política transforma o score em aprovação, revisão manual ou rejeição demonstrativa.
+8. O Streamlit disponibiliza formulário, recuperação editável e consulta direta.
+
+## Cenário de treinamento ponta a ponta
+
+```text
+Analista disponibiliza CSVs
+  → Airflow valida o escopo configurado
+  → cada fonte é carregada em chunks
+  → índices apoiam limpeza e joins
+  → fontes são padronizadas em tabelas clean
+  → históricos são agregados por cliente
+  → ABT é materializada
+  → LightGBM é treinado e avaliado em holdout
+  → modelo final é retreinado com toda a ABT
+  → artefato e métricas são persistidos
+```
+
+O pipeline pode ser reexecutado para reconstruir as tabelas derivadas e atualizar o artefato. A seleção de algoritmo e hiperparâmetros permanece documentada nos notebooks, enquanto a DAG executa a configuração já escolhida.
+
+## Cenários de inferência
+
+### Features fornecidas
+
+O consumidor envia as 42 features para `POST /predict/features`. A API alinha tipos e ordem, calcula o score e aplica a política configurada.
+
+### Cliente armazenado
+
+O consumidor informa `sk_id_curr`. O serviço lê `application_abt`, remove identificador e target e envia as mesmas features ao modelo. Há duas modalidades:
+
+- recuperar as features para edição com `GET /customers/{customer_id}/features`;
+- calcular diretamente com `POST /predict/customer/{customer_id}`.
+
+Essa abordagem reduz divergência entre engenharia de atributos offline e online, pois a inferência por cliente consome a ABT já materializada.
+
+## Contratos entre componentes
+
+| Contrato | Fonte de verdade | Consumidores |
+|---|---|---|
+| Fontes e tabelas do pipeline | `DataPipeline/config_pipeline.json` | DAG e módulos de transformação. |
+| Features e hiperparâmetros | `Model/config_model.json` | treinamento, avaliação e validações. |
+| Artefato de inferência | `Model/artifacts/lightgbm_abt.pkl` | script local e API. |
+| Schema HTTP | `MLOps/app/api/schemas.py` | API e frontend. |
+| Limites da política | variáveis `CREDIT_*` | API e apresentação do resultado. |
+
+Alterações nas features exigem atualização coordenada da ABT, configuração do modelo, novo treinamento e campos do frontend.
+
+## Estrutura
+
+```text
+data-platform/
+├── airflow/             # ambiente e DAG de orquestração
+├── DataPipeline/        # ingestão, transformações, ABT e EDA
+├── jupyter/             # imagem do ambiente de notebooks
+├── MLOps/               # FastAPI, Streamlit e testes
+├── Model/               # treinamento, avaliação e artefatos
+├── postgres/            # inicialização do banco data
+├── Dados/               # pasta reservada aos CSVs da entrega acadêmica
+├── docker-compose.yml   # composição dos serviços
+└── README.md
+```
+
+## Pré-requisitos
+
+- Docker com suporte a Compose v2;
+- aproximadamente 2 GB livres para os CSVs de origem e volumes locais;
+- arquivos da competição Home Credit correspondentes às quatro fontes configuradas.
+
+Para execução local fora de containers, também é necessário Python compatível com as dependências do componente utilizado.
+
+## Configuração inicial
+
+1. Configure o token do Jupyter em `data-platform/.env`:
+
+```dotenv
+JUPYTER_TOKEN=defina-um-token-local
+```
+
+2. Coloque estes arquivos em `data-platform/airflow/data/csv`:
+
+```text
+application_train.csv
+previous_application.csv
+bureau.csv
+installments_payments.csv
+```
+
+3. Entre na pasta da plataforma:
 
 ```bash
 cd data-platform
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
 ```
 
-Coloque os arquivos originais do Home Credit em `data-platform/data/csv`.
-
-## Pipeline de dados
+## Inicialização completa
 
 ```bash
-cd data-platform
-docker compose up -d --build postgres airflow-init airflow-webserver airflow-scheduler jupyter
+docker compose up -d --build
 ```
 
-- Airflow: `http://localhost:8080` (`admin` / `admin`)
-- Jupyter: `http://localhost:8888` (token configurado no `.env`)
+O `airflow-init` termina após preparar o ambiente; os demais serviços permanecem ativos.
 
-Execute primeiro a DAG `loadfile_csv_to_postgres` e depois
-`pipeline_orchestration`. A análise exploratória está em
-`DataPipeline/exp_analysis.ipynb`.
-
-## Como treinar o modelo
-
-Na pasta `data-platform`:
+Para acompanhar o estado:
 
 ```bash
-.venv/bin/python Model/train.py
+docker compose ps
+docker compose logs -f airflow-scheduler credit-api credit-frontend
 ```
 
-O script lê `Model/config_model.json` e grava o artefato em
-`Model/artifacts/logistic_regression_abt.pkl`. Para um teste rápido sem
-substituir o modelo oficial:
+## Inicialização por camada
+
+Infraestrutura e orquestração:
 
 ```bash
-.venv/bin/python Model/train.py \
-  --sample-size 5000 \
-  --n-jobs 1 \
-  --output /tmp/logistic_regression_smoke.pkl
+docker compose up -d --build postgres airflow-init
+docker compose up -d airflow-webserver airflow-scheduler
 ```
 
-## Comparação de modelos
-
-Para justificar a escolha do algoritmo, execute a comparação entre Regressão
-Logística, Árvore de Decisão e Random Forest usando a mesma ABT, o mesmo split e
-as métricas `roc_auc`, `accuracy` e `precision`:
+Notebooks:
 
 ```bash
-.venv/bin/python Model/compare_models.py
+docker compose up -d --build jupyter
 ```
 
-O resultado é salvo em `Model/artifacts/model_comparison.csv`. Para um teste
-rápido:
-
-```bash
-.venv/bin/python Model/compare_models.py --sample-size 5000 --n-jobs 1
-```
-
-Na justificativa técnica, priorize `roc_auc`, pois a base é desbalanceada e o
-objetivo principal é ordenar clientes por risco.
-
-## Avaliação e interpretabilidade
-
-Abra e execute `Model/evaluation.ipynb`. O notebook reproduz o conjunto de
-teste, calcula ROC AUC, Average Precision, relatório de classificação, matriz de
-confusão e curvas ROC/Precisão–Recall, além de ordenar os coeficientes de maior
-influência.
-
-## Predição local
-
-```bash
-.venv/bin/python Model/predict.py --input Dados/abt.csv --row 0
-```
-
-Também é possível fornecer um JSON contendo todas as features esperadas.
-
-## Execução do serviço de predição
-
-### Docker Compose
-
-Na pasta `data-platform`, inicie a API, o frontend e o PostgreSQL:
+Serviço de predição:
 
 ```bash
 docker compose up -d --build postgres credit-api credit-frontend
 ```
 
-Acessos:
+## URLs locais
 
-- Swagger da API: `http://localhost:8000/docs`;
-- verificação da API: `http://localhost:8000/health`;
-- interface Streamlit: `http://localhost:8501`.
+| Componente | URL | Credencial |
+|---|---|---|
+| Airflow | http://localhost:8080 | `admin` / `admin` |
+| JupyterLab | http://localhost:8888 | `JUPYTER_TOKEN` |
+| Swagger da API | http://localhost:8000/docs | — |
+| Health check | http://localhost:8000/health | — |
+| Streamlit | http://localhost:8501 | — |
 
-Para acompanhar os logs:
+## Execução do pipeline
 
-```bash
-docker compose logs -f credit-api credit-frontend
-```
+1. Acesse o Airflow em http://localhost:8080.
+2. Habilite a DAG `pipeline_orchestration`.
+3. Inicie uma execução manual.
+4. Acompanhe as tarefas até o treinamento e a persistência do modelo.
 
-Para interromper os serviços:
+Detalhes das tarefas, pools e entradas estão no [README do Airflow](./airflow/README.md).
 
-```bash
-docker compose stop credit-api credit-frontend
-```
+## Notebooks oficiais
 
-### Execução local
+| Notebook | Finalidade |
+|---|---|
+| [`DataPipeline/exp_analysis_raw.ipynb`](./DataPipeline/exp_analysis_raw.ipynb) | Exploração e diagnóstico das fontes brutas. |
+| [`DataPipeline/exp_analysis_abt.ipynb`](./DataPipeline/exp_analysis_abt.ipynb) | Validação e exploração da ABT tratada. |
+| [`Model/validacao_modelos.ipynb`](./Model/validacao_modelos.ipynb) | Comparação, tuning e controle de overfitting. |
+| [`Model/evaluation.ipynb`](./Model/evaluation.ipynb) | Avaliação final, threshold, explicabilidade e fairness. |
 
-Com o PostgreSQL disponível:
-
-```bash
-export DATABASE_URL="postgresql+psycopg2://airflow:airflow@localhost:5432/data"
-.venv/bin/python -m uvicorn MLOps.app.api.main:app --reload
-```
-
-Em outro terminal:
-
-```bash
-export CREDIT_API_URL="http://localhost:8000"
-.venv/bin/python -m streamlit run MLOps/app/frontend/app.py
-```
-
-### Endpoints
-
-- `GET /health`: verifica se o modelo foi carregado;
-- `GET /model/features`: lista as features esperadas;
-- `POST /predict/features`: recebe todas as features no corpo da requisição;
-- `POST /predict/customer/{customer_id}`: consulta o cliente no PostgreSQL e
-  constrói as features utilizadas pelo modelo.
-
-Exemplo:
+## Parada dos serviços
 
 ```bash
-curl -X POST http://localhost:8000/predict/customer/100002
+docker compose stop
 ```
 
-Os limites da política são demonstrativos. O `risk_score` deve ser tratado como
-uma pontuação de ordenação até que seja realizada a calibração de probabilidade.
-
-## Testes
+Para remover apenas os containers e a rede, preservando o volume do PostgreSQL:
 
 ```bash
-.venv/bin/python -m unittest discover -s MLOps/tests -v
+docker compose down
 ```
 
-Os testes verificam a política de crédito, o serviço de inferência, o script
-`predict.py` e a consistência entre configurações e artefato persistido.
+## Próximos passos
+
+- calibrar o score quando houver necessidade de interpretação probabilística;
+- validar thresholds com custos reais do negócio;
+- implementar monitoramento contínuo de dados, modelo e serviço;
+- formalizar versionamento, rastreabilidade e auditoria das decisões;
+- automatizar testes, build e implantação.
