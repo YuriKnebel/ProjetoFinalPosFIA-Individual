@@ -63,6 +63,8 @@ FIELDS = (
     FieldConfig("bureau_debt_credit_ratio", "Dívida / crédito no bureau", "Histórico de crédito", default=0.0, minimum=-1, maximum=1, step=0.01),
     FieldConfig("bureau_overdue_count", "Créditos em atraso no bureau", "Histórico de crédito", default=0.0, minimum=0, step=1),
     FieldConfig("has_bureau", "Tem histórico no bureau", "Histórico de crédito", "boolean", 1),
+    FieldConfig("inst_late_payment_rate", "Taxa de parcelas pagas com atraso", "Histórico de parcelas", default=0.0, minimum=0, maximum=1, step=0.01),
+    FieldConfig("has_installments_history", "Tem histórico de parcelas", "Histórico de parcelas", "boolean", 1),
 )
 
 FIELD_NAMES = tuple(field.name for field in FIELDS)
