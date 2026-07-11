@@ -11,12 +11,12 @@ class Settings:
     model_path: Path = Path(
         os.getenv(
             "MODEL_PATH",
-            str(DATA_PLATFORM_DIR / "Model" / "artifacts" / "logistic_regression_abt.pkl"),
+            str(DATA_PLATFORM_DIR / "Model" / "artifacts" / "lightgbm_abt.pkl"),
         )
     )
     database_url: str = os.getenv(
         "DATABASE_URL",
-        "postgresql+psycopg2://airflow:airflow@localhost:5432/data",
+        "postgresql+psycopg2://airflow:airflow@postgres:5432/data",
     )
     approve_max_score: float = float(os.getenv("CREDIT_APPROVE_MAX_SCORE", "0.35"))
     manual_review_max_score: float = float(

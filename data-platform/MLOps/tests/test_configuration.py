@@ -20,7 +20,7 @@ class ConfigurationTest(unittest.TestCase):
             "Model/evaluation.ipynb",
             "MLOps/app/api/main.py",
             "MLOps/app/frontend/app.py",
-            "MLOps/pipeline_orchestration.py",
+            "airflow/dags/pipeline_orchestration.py",
             "requirements.txt",
         )
         missing = [
