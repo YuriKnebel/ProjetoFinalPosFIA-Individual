@@ -49,8 +49,8 @@ O projeto segue o método **CRISP-DM**, com ênfase na *justificativa* de cada e
 
 1. **Entendimento dos dados (EDA em duas etapas):** diagnóstico das fontes brutas para decidir tratamentos e, depois do pipeline, validação da base limpa. A força de cada variável é **medida** (Pearson, Cramér's V, WOE/IV) e a redundância é checada por multicolinearidade — não presumida.
 2. **Preparação:** limpeza e engenharia por **regras** (imputação por mediana em variáveis assimétricas, winsorização de outliers, isolamento de anomalias em flags, condensação de categorias raras) e consolidação das relações um-para-muitos em uma **ABT** de uma linha por cliente, com **flags de presença** que separam "sem histórico" de "histórico observado".
-3. **Modelagem:** comparação **curada** de quatro famílias (linear regularizado, *bagging*, dois *boostings*) por busca de hiperparâmetros com validação cruzada estratificada, medindo **treino × CV × teste externo** e aplicando um **filtro de overfitting**; o LightGBM é selecionado, usa **categóricas nativas** e o artefato final é retreinado com toda a ABT.
-4. **Avaliação:** medição em **holdout honesto** com métricas de crédito (AUC/KS/Gini/PR-AUC), leitura de negócio por **decis** e **threshold como decisão econômica** (valor esperado, com análise de sensibilidade), **interpretabilidade** (permutação + SHAP) e **governança/fairness** com plano de monitoramento.
+3. **Modelagem:** comparação **curada** de quatro famílias (linear regularizado, *bagging*, dois *boostings*) por busca de hiperparâmetros com validação cruzada estratificada, medindo **treino × CV × conjunto externo** e aplicando um filtro de overfitting. A etapa comparativa adota uma representação comum com *one-hot encoding*; após a seleção, o LightGBM oficial utiliza categóricas nativas e é retreinado com toda a ABT.
+4. **Avaliação:** medição da configuração oficial em uma partição não usada no seu ajuste, com métricas de crédito (AUC/KS/Gini/PR-AUC), leitura de negócio por **decis** e **threshold como decisão econômica** (valor esperado, com análise de sensibilidade), **interpretabilidade** (permutação + SHAP) e **governança/fairness** com plano de monitoramento.
 5. **Implantação:** persistência do artefato reprodutível e disponibilização por API e interface web, com a **política de crédito separada do modelo**.
 
 O score retornado pelo modelo deve ser tratado como uma **pontuação de ordenação de risco, não como probabilidade calibrada**.
@@ -59,7 +59,7 @@ O score retornado pelo modelo deve ser tratado como uma **pontuação de ordena�
 
 Em vez de fixar números que mudam a cada re-treino, a confiança na solução se apoia em **método**:
 
-- **holdout honesto** e **consistência teste × validação cruzada** como evidência de generalização (sem overfitting escondido);
+- **separação entre ajuste e medição**, somada à consistência entre treino, validação cruzada e conjunto externo, como evidência de estabilidade e generalização;
 - **métricas de ordenação** adequadas ao desbalanceamento (AUC/Gini/KS/PR-AUC), em vez de acurácia;
 - **coerência EDA → poder preditivo → modelo** (permutação/SHAP) como argumento contra vazamento;
 - reconhecimento explícito de que o score é **ranking de risco, não probabilidade calibrada** (a calibração fica registrada como próximo passo);
