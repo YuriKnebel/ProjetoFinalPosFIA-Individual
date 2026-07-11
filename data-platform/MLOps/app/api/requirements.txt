@@ -4,5 +4,6 @@ pydantic>=2.10,<3
 numpy>=1.26,<3
 pandas>=2.2,<3
 scikit-learn>=1.6,<2
+lightgbm>=4.3,<5
 SQLAlchemy>=2,<3
 psycopg2-binary>=2.9,<3

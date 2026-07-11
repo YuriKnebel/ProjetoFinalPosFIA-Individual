@@ -138,6 +138,7 @@ services:
       - "${CREDIT_API_PORT:-8000}:8000"
     environment:
       DATABASE_URL: postgresql+psycopg2://airflow:airflow@postgres:5432/data
+      MODEL_PATH: /app/Model/artifacts/lightgbm_abt.pkl
       CREDIT_APPROVE_MAX_SCORE: "0.35"
       CREDIT_MANUAL_REVIEW_MAX_SCORE: "0.65"
       CREDIT_POLICY_VERSION: demo-v1

@@ -17,7 +17,6 @@ class PredictionService:
     REQUIRED_ARTIFACT_KEYS = {
         "model",
         "decision_threshold",
-        "input_features",
         "metrics",
     }
 
@@ -32,10 +31,15 @@ class PredictionService:
         with self.model_path.open("rb") as file:
             artifact = pickle.load(file)
         missing_keys = self.REQUIRED_ARTIFACT_KEYS.difference(artifact)
+        if "input_features" not in artifact and "features" not in artifact:
+            missing_keys.add("input_features")
         if missing_keys:
             raise ValueError(
                 f"Artefato inválido. Chaves ausentes: {sorted(missing_keys)}"
             )
+
+        if "input_features" not in artifact:
+            artifact["input_features"] = artifact["features"]
 
         self.artifact = artifact
 
@@ -62,6 +66,17 @@ class PredictionService:
 
         # Reindex garante ordem idêntica à do treinamento e ignora campos extras.
         customer = pd.DataFrame([features]).reindex(columns=self.expected_features)
+        categorical_features = self.artifact.get("categorical_features", [])
+        saved_categories = self.artifact.get("categories", {})
+        categorical_set = set(categorical_features)
+        for column in customer.columns:
+            if column in categorical_set:
+                customer[column] = pd.Categorical(
+                    customer[column],
+                    categories=saved_categories.get(column),
+                )
+            else:
+                customer[column] = pd.to_numeric(customer[column], errors="coerce")
         risk_score = float(self.artifact["model"].predict_proba(customer)[0, 1])
         predicted_class = int(risk_score >= self.decision_threshold)
         return risk_score, predicted_class

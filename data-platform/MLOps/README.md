@@ -41,14 +41,12 @@ MLOps/
 ├── tests/
 ├── Dockerfile.api
 ├── Dockerfile.frontend
-├── pipeline_orchestration.py   # DAG que coordena limpeza e construção da ABT
 └── test-requirements.txt
 ```
 
 O `docker-compose.yml` permanece na raiz de `data-platform`, pois também
-orquestra PostgreSQL, Airflow, Jupyter e Metabase. O Compose monta `MLOps` em
-`/opt/MLOps`; um link simbólico em `airflow/dags` aponta para a DAG original,
-permitindo que o Airflow a reconheça sem duplicar o código.
+orquestra PostgreSQL, Airflow, Jupyter e Metabase. A DAG que coordena a limpeza
+e a construção da ABT fica em `airflow/dags/pipeline_orchestration.py`.
 
 ## Execução com Docker Compose
 
