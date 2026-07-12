@@ -3,7 +3,7 @@
     "project": "Predicao de risco de credito (Home Credit Default Risk)",
     "component": "Model",
     "version": "1.0.0",
-    "last_updated": "2026-07-10",
+    "last_updated": "2026-07-12",
     "description": "Configuracao de treinamento, avaliacao e inferencia do modelo de risco de credito.",
     "algorithm": "LightGBM",
     "problem_type": "binary_classification",
@@ -58,13 +58,13 @@
     "classifier": {
       "algorithm": "LightGBM",
       "hyperparameters": {
-        "n_estimators": 268,
-        "learning_rate": 0.0778,
-        "num_leaves": 45,
-        "max_depth": 4,
-        "min_child_samples": 263,
-        "colsample_bytree": 0.8444,
-        "reg_lambda": 1.0707,
+        "n_estimators": 276,
+        "learning_rate": 0.0985,
+        "num_leaves": 24,
+        "max_depth": 3,
+        "min_child_samples": 163,
+        "colsample_bytree": 0.7692,
+        "reg_lambda": 1.5025,
         "class_weight": "balanced"
       }
     },
@@ -83,15 +83,15 @@
     "selected_model": "LightGBM",
     "selection_reason": "Maior AUC na validacao cruzada com overfitting controlado. Usa categoricas nativas do LightGBM (sem one-hot) por ser um modelo baseado em arvores. AUC priorizada por ser adequada a base desbalanceada e a ordenacao de risco.",
     "cross_validation_metrics": {
-      "roc_auc": 0.7612,
+      "roc_auc": 0.7539,
       "folds": 5
     },
     "test_metrics": {
-      "roc_auc": 0.7584,
-      "gini": 0.5168,
-      "ks": 0.3864,
-      "average_precision": 0.2450,
-      "brier": 0.1922
+      "roc_auc": 0.763,
+      "gini": 0.5259,
+      "ks": 0.3949,
+      "average_precision": 0.2468,
+      "brier": 0.1934
     }
   }
 }
