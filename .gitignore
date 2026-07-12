@@ -1,8 +1,11 @@
 /data-platform/airflow/data
-
-# Python
 *.pyc
-__pycache__/
-
-# Jupyter
-.ipynb_checkpoints/
+/data-platform/airflow/dags/__pycache__
+/data-platform/DataPipeline/.ipynb_checkpoints/*
+/.internal
+abt.csv
+.venv
+/data-platform/Model/.venv/**
+# artefato do modelo (binario; reproduzivel via train.py). metrics.json fica versionado.
+/data-platform/Model/artifacts/*.pkl
+/data-platform/Model/artifacts/*.joblib

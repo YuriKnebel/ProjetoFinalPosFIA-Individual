@@ -1,22 +1,22 @@
 {
   "algorithm": "LightGBM",
   "hyperparameters": {
-    "n_estimators": 276,
-    "learning_rate": 0.0985,
-    "num_leaves": 24,
-    "max_depth": 3,
-    "min_child_samples": 163,
-    "colsample_bytree": 0.7692,
-    "reg_lambda": 1.5025,
+    "n_estimators": 268,
+    "learning_rate": 0.0778,
+    "num_leaves": 45,
+    "max_depth": 4,
+    "min_child_samples": 263,
+    "colsample_bytree": 0.8444,
+    "reg_lambda": 1.0707,
     "class_weight": "balanced"
   },
   "test_metrics": {
-    "roc_auc": 0.7583,
-    "gini": 0.5166,
-    "ks": 0.3898,
-    "average_precision": 0.2464,
-    "brier": 0.1935
+    "roc_auc": 0.7593,
+    "gini": 0.5185,
+    "ks": 0.398,
+    "average_precision": 0.2426,
+    "brier": 0.1908
   },
   "decision_threshold": 0.5,
-  "trained_at_utc": "2026-07-10T00:56:31+00:00"
+  "trained_at_utc": "2026-07-12T12:49:55+00:00"
 }
