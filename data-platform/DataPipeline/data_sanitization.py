@@ -1,212 +1,224 @@
 # -*- coding: utf-8 -*-
 """
-data_sanitization_v2.py — Limpeza e padronização (Home Credit) no padrão da pipeline adaptada.
-
-Unificação da lógica analítica v2 (estatísticas globais, tratamento de scores e outliers)
-com o padrão arquitetural de conexões inteligentes e utilitários customizados.
+data_sanitization.py — Limpeza e padronização (Home Credit) via ELT (SQL Puro)
+Processamento transferido 100% para dentro do PostgreSQL.
+Funções puras: todas as configurações são recebidas por parâmetro via DAG (Airflow).
 """
-import os
-import numpy as np
-import pandas as pd
-from utils import append_dataframe_to_postgres, get_database_connection, save_dataframe_to_postgres
+from utils import get_database_connection, log_row_count
 
-def _reduz_cardinalidade(serie: pd.Series, min_freq: int) -> pd.Series:
-    """Categorias com frequência < min_freq viram 'Other_low_freq'; nulos viram 'Unknown'."""
-    print("Redução da Cardinalidade")
-    freq = serie.value_counts()
-    validas = freq[freq >= min_freq].index
+def get_table_columns(cursor, table_name: str) -> list:
+    """Busca dinamicamente a lista de colunas de uma tabela no PostgreSQL."""
+    cursor.execute(f"""
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = '{table_name}'
+        ORDER BY ordinal_position;
+    """)
+    return [row[0] for row in cursor.fetchall()]
+
+# ---------------------------------------------------------------------------
+# application_train
+# ---------------------------------------------------------------------------
+def run_sanitization(conn_id: str, input_table: str, output_table: str, min_freq: int, winsor_q: float):
+    """Higieniza application_train usando SQL nativo para estatísticas globais e regras lógicas."""
+    conn = get_database_connection(conn_id)
+    cursor = conn.cursor()
+
+    print(f"Limpando '{input_table}' -> '{output_table}' (ELT via PostgreSQL)...")
     
-    return (serie.where(serie.isin(validas), "Other_low_freq").fillna("Unknown").astype(str).str.strip())
-
-# --------------------------------------------------------------------------
-# Lógicas de Sanitização 
-# --------------------------------------------------------------------------
-def sanitize_application_train(df: pd.DataFrame, min_freq: int = 500, income_winsor_q: float = 0.99) -> pd.DataFrame:
-    """Aplica a lógica exata de higienização v2 (Estatísticas Globais)."""
-    print("Lendo DataFrame pandas")
-    c = pd.DataFrame()
-
-    print("Iniciando tratamento das Features da Application Train")
-    c["sk_id_curr"] = (pd.to_numeric(df["sk_id_curr"], errors="coerce").astype("Int64"))
-    c["target"] = pd.to_numeric(df["target"], errors="coerce").astype("Int64")
-
-    # Scores externos: ext_source_2 + (1 e 3 imputados) + média combinada
-    c["ext_source_2"] = (pd.to_numeric(df["ext_source_2"], errors="coerce").fillna(df["ext_source_2"].median()))
-    _es = pd.concat(
-        [
-            pd.to_numeric(df["ext_source_1"], errors="coerce"),
-            pd.to_numeric(df["ext_source_2"], errors="coerce"),
-            pd.to_numeric(df["ext_source_3"], errors="coerce"),
-        ],axis=1)
-    c["ext_source_mean"] = _es.mean(axis=1)
-    c["ext_source_mean"] = c["ext_source_mean"].fillna(c["ext_source_mean"].median())
-    c["ext_source_1"] = _es.iloc[:, 0].fillna(_es.iloc[:, 0].median())
-    c["ext_source_3"] = _es.iloc[:, 2].fillna(_es.iloc[:, 2].median())
-
-    c["region_rating_client_w_city"] = (pd.to_numeric(df["region_rating_client_w_city"], errors="coerce").astype("Int64"))
-    c["days_last_phone_change"] = (pd.to_numeric(df["days_last_phone_change"], errors="coerce").fillna(df["days_last_phone_change"].median()))
-    c["days_id_publish"] = pd.to_numeric(df["days_id_publish"], errors="coerce")
-    c["days_registration"] = pd.to_numeric(df["days_registration"], errors="coerce")
-
-    for col in ["reg_city_not_work_city","reg_city_not_live_city","live_city_not_work_city",]:
-        c[col] = (pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int))
-
-    # own_car_age + flag has_car
-    _own_car_age = pd.to_numeric(df["own_car_age"], errors="coerce")
-    c["has_car"] = ((df["flag_own_car"].astype(str).str.strip() == "Y").astype(int))
-    _median_car_age = _own_car_age[c["has_car"] == 1].median()
-    c["own_car_age"] = (_own_car_age.where(c["has_car"] == 1, 0).fillna(_median_car_age))
-
-    # Demais tratamentos numéricos
-    c["def_60_cnt_social_circle"] = (pd.to_numeric(df["def_60_cnt_social_circle"], errors="coerce").fillna(0))
-    c["amt_req_credit_bureau_year"] = (pd.to_numeric(df["amt_req_credit_bureau_year"], errors="coerce").fillna(0))
-    c["cnt_children"] = (pd.to_numeric(df["cnt_children"], errors="coerce").fillna(0).astype(int))
-    c["cnt_fam_members"] = (pd.to_numeric(df["cnt_fam_members"], errors="coerce").fillna(df["cnt_fam_members"].median()))
-
-    # Renda: tratamento de outliers (Winsorização p99)
-    income = pd.to_numeric(df["amt_income_total"], errors="coerce").replace(0, np.nan)
-    income = income.fillna(income.median())
-    p99 = income.quantile(income_winsor_q)
-    c["amt_income_total"] = income.clip(upper=p99)
-
-    c["amt_credit"] = pd.to_numeric(df["amt_credit"], errors="coerce")
-    c["amt_annuity"] = (pd.to_numeric(df["amt_annuity"], errors="coerce").fillna(df["amt_annuity"].median()))
-
-    # Categóricas e redução de cardinalidade
-    c["occupation_type"] = (df["occupation_type"].fillna("Unknown").astype(str).str.strip())
-    c["organization_type"] = _reduz_cardinalidade(df["organization_type"], min_freq)
-    c["name_income_type"] = _reduz_cardinalidade(df["name_income_type"], min_freq)
-    c["name_education_type"] = (df["name_education_type"].fillna("Unknown").astype(str).str.strip())
-    c["code_gender"] = (df["code_gender"].replace("XNA", "Unknown").fillna("Unknown").astype(str).str.strip())
-
-    print("Finalizando tratamento do DataFrame Pandas com as features sanitizadas")
+    log_row_count(cursor, input_table, "Entrada")
     
-    return c
+    sql_elt = f"""
+    DROP TABLE IF EXISTS "{output_table}" CASCADE;
+    
+    CREATE TABLE "{output_table}" AS
+    WITH global_stats AS (
+        SELECT
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY ext_source_1) AS median_es1,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY ext_source_2) AS median_es2,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY ext_source_3) AS median_es3,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY (COALESCE(ext_source_1, 0) + COALESCE(ext_source_2, 0) + COALESCE(ext_source_3, 0))/3.0) AS median_es_mean,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY days_last_phone_change) AS median_phone,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY cnt_fam_members) AS median_fam,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY amt_annuity) AS median_annuity,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY NULLIF(amt_income_total, 0)) AS median_income,
+            percentile_cont({winsor_q}) WITHIN GROUP (ORDER BY NULLIF(amt_income_total, 0)) AS p99_income,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY own_car_age) FILTER (WHERE TRIM(flag_own_car) = 'Y') AS median_car_age
+        FROM "{input_table}"
+    ),
+    valid_orgs AS (
+        SELECT organization_type FROM "{input_table}" GROUP BY 1 HAVING COUNT(*) >= {min_freq}
+    ),
+    valid_incs AS (
+        SELECT name_income_type FROM "{input_table}" GROUP BY 1 HAVING COUNT(*) >= {min_freq}
+    )
+    SELECT
+        CAST(app.sk_id_curr AS BIGINT) AS sk_id_curr,
+        CAST(app.target AS BIGINT) AS target,
 
-def sanitize_bureau(df_bureau: pd.DataFrame) -> pd.DataFrame:
-    """Tipagem e imputação para o histórico do Bureau (utilizada em transformações downstream)."""
-    b = df_bureau.copy()
-    b["credit_active"] = b["credit_active"].astype(str).str.strip()
-    b["credit_type"] = b["credit_type"].astype(str).str.strip()
+        COALESCE(app.ext_source_1, stats.median_es1) AS ext_source_1,
+        COALESCE(app.ext_source_2, stats.median_es2) AS ext_source_2,
+        COALESCE(app.ext_source_3, stats.median_es3) AS ext_source_3,
+        
+        COALESCE(
+            (COALESCE(app.ext_source_1, stats.median_es1) + 
+             COALESCE(app.ext_source_2, stats.median_es2) + 
+             COALESCE(app.ext_source_3, stats.median_es3)) / 3.0, 
+        stats.median_es_mean) AS ext_source_mean,
 
-    cols_zero = [
-        "amt_credit_sum",
-        "amt_credit_sum_debt",
-        "amt_credit_sum_overdue",
-        "credit_day_overdue",
-        "cnt_credit_prolong",
-    ]
-    for col in cols_zero:
-        b[col] = pd.to_numeric(b[col], errors="coerce").fillna(0)
+        CAST(app.region_rating_client_w_city AS BIGINT) AS region_rating_client_w_city,
+        COALESCE(app.days_last_phone_change, stats.median_phone) AS days_last_phone_change,
+        app.days_id_publish,
+        app.days_registration,
 
-    for col in ["days_credit", "days_credit_update"]:
-        b[col] = pd.to_numeric(b[col], errors="coerce")
+        COALESCE(app.reg_city_not_work_city, 0) AS reg_city_not_work_city,
+        COALESCE(app.reg_city_not_live_city, 0) AS reg_city_not_live_city,
+        COALESCE(app.live_city_not_work_city, 0) AS live_city_not_work_city,
 
-    return b
-# --------------------------------------------------------------------------
-# Funções de Execução da Pipeline 
-# --------------------------------------------------------------------------
-def run_sanitization(conn_id: str, input_table: str, output_table: str, min_freq, winsor_q) -> None:
-    """Executa a higienização da tabela principal carregando a base completa
+        CASE WHEN TRIM(app.flag_own_car) = 'Y' THEN 1 ELSE 0 END AS has_car,
+        CASE 
+            WHEN TRIM(app.flag_own_car) = 'Y' THEN COALESCE(app.own_car_age, stats.median_car_age) 
+            ELSE 0 
+        END AS own_car_age,
 
-    (necessário para o cálculo correto das métricas globais de mediana e quantis).
+        COALESCE(app.def_60_cnt_social_circle, 0) AS def_60_cnt_social_circle,
+        COALESCE(app.amt_req_credit_bureau_year, 0) AS amt_req_credit_bureau_year,
+        CAST(COALESCE(app.cnt_children, 0) AS INTEGER) AS cnt_children,
+        COALESCE(app.cnt_fam_members, stats.median_fam) AS cnt_fam_members,
+
+        LEAST(
+            COALESCE(NULLIF(app.amt_income_total, 0), stats.median_income), 
+            stats.p99_income
+        ) AS amt_income_total,
+        
+        app.amt_credit,
+        COALESCE(app.amt_annuity, stats.median_annuity) AS amt_annuity,
+
+        COALESCE(TRIM(app.occupation_type), 'Unknown') AS occupation_type,
+        CASE WHEN o.organization_type IS NOT NULL THEN TRIM(app.organization_type) ELSE 'Other_low_freq' END AS organization_type,
+        CASE WHEN i.name_income_type IS NOT NULL THEN TRIM(app.name_income_type) ELSE 'Other_low_freq' END AS name_income_type,
+        COALESCE(TRIM(app.name_education_type), 'Unknown') AS name_education_type,
+        COALESCE(REPLACE(TRIM(app.code_gender), 'XNA', 'Unknown'), 'Unknown') AS code_gender,
+
+        ABS(app.days_birth) / 365.25 AS age,
+        CASE WHEN app.days_employed = 365243 THEN 0 ELSE ABS(app.days_employed) / 365.25 END AS years_employed,
+        CASE WHEN app.days_employed = 365243 THEN 1 ELSE 0 END AS days_employed_anom
+
+    FROM "{input_table}" app
+    CROSS JOIN global_stats stats
+    LEFT JOIN valid_orgs o ON app.organization_type = o.organization_type
+    LEFT JOIN valid_incs i ON app.name_income_type = i.name_income_type;
     """
-    print(f"Carregando '{input_table}' completo para cálculo de estatísticas globais...")
-
-    # Utilizando sua conexão inteligente camaleônica
-    conn = get_database_connection(conn_id)
-
-    print("Iniciando leitura dos dados")
-    query = f'SELECT * FROM "{input_table}";'
-    df = pd.read_sql_query(query, conn)
-
-    # Processamento analítico
-    print("--------- Iniciando sanitização de dados ------------------")
-    clean_df = sanitize_application_train(df, min_freq=min_freq, income_winsor_q=winsor_q)
-    nulos = int(clean_df.isna().sum().sum())
-    print(f"Base limpa: {clean_df.shape[0]:,} linhas x {clean_df.shape[1]} colunas | nulos remanescentes={nulos}")
-
-    print(f"Salvando dados na tabela destino: '{output_table}'...")
-    save_dataframe_to_postgres(clean_df, output_table, conn_id)
-
+    
+    cursor.execute(sql_elt)
+    conn.commit()
+    log_row_count(cursor, output_table, "Saída")
+    cursor.close()
     conn.close()
-    print(f"--- Sanitização concluída! Tabela '{output_table}' atualizada. ---")
+    print(f"--- Application Train higienizado! Tabela: '{output_table}' ---")
 
-def run_prev_sanitization(conn_id: str, input_table: str, output_table: str, chunk_size: int) -> None:
-    """Higieniza tabelas de histórico (como previous_application) processando via Chunks."""
-    print(f"Sanitizando Histórico: {input_table} -> {output_table} em blocos de {chunk_size}...")
+
+# ---------------------------------------------------------------------------
+# previous_application 
+# ---------------------------------------------------------------------------
+def run_prev_sanitization(conn_id: str, input_table: str, output_table: str):
+    """Constrói SQL dinâmico para limpar previous_application preservando colunas não alteradas."""
     conn = get_database_connection(conn_id)
+    cursor = conn.cursor()
 
-    query = f'SELECT * FROM "{input_table}";'
-    chunks = pd.read_sql_query(query, conn, chunksize=chunk_size)
-
-    first_chunk = True
-    for df_chunk in chunks:
-        # Padronização básica de strings contida no seu script original
-        if "name_contract_status" in df_chunk.columns:
-            df_chunk["name_contract_status"] = (df_chunk["name_contract_status"].astype(str).str.strip())
-
-        if first_chunk:
-            save_dataframe_to_postgres(df_chunk, output_table, conn_id)
-            first_chunk = False
+    print(f"Limpando '{input_table}' -> '{output_table}' (ELT via SQL dinâmico)...")
+    cols = get_table_columns(cursor, input_table)
+    
+    select_exprs = []
+    for col in cols:
+        if col == "name_contract_status":
+            select_exprs.append(f'INITCAP(TRIM("{col}")) AS "{col}"')
+        elif col == "amt_application":
+            select_exprs.append(f'GREATEST(COALESCE("{col}", 0), 0) AS "{col}"')
         else:
-            append_dataframe_to_postgres(df_chunk, output_table, conn_id)
+            select_exprs.append(f'"{col}"')
 
+    log_row_count(cursor, input_table, "Entrada")
+
+    sql_elt = f"""
+    DROP TABLE IF EXISTS "{output_table}" CASCADE;
+    CREATE TABLE "{output_table}" AS
+    SELECT {", ".join(select_exprs)} FROM "{input_table}";
+    """
+
+    cursor.execute(sql_elt)
+    conn.commit()
+    log_row_count(cursor, output_table, "Saída")
+    cursor.close()
     conn.close()
-    print(f"Sanitização completa de {output_table} finalizada!")
+    print(f"--- Previous Application limpo! Tabela '{output_table}' ---")
 
-def run_bureau_sanitization(conn_id: str, input_table: str, output_table: str, chunk_size: int) -> None:
-    """Materializa e higieniza a tabela Bureau processando em chunks no seu padrão."""
-    print(f"Materializando Bureau: {input_table} -> {output_table} em blocos de {chunk_size}...")
+
+# ---------------------------------------------------------------------------
+# bureau 
+# ---------------------------------------------------------------------------
+def run_bureau_sanitization(conn_id: str, input_table: str, output_table: str):
+    """Constrói SQL dinâmico para limpar bureau preservando colunas não alteradas."""
     conn = get_database_connection(conn_id)
+    cursor = conn.cursor()
 
-    query = f'SELECT * FROM "{input_table}";'
-    chunks = pd.read_sql_query(query, conn, chunksize=chunk_size)
-
-    first_chunk = True
-    for df_chunk in chunks:
-        # Executa a limpeza exata do bureau v2 no pedaço atual
-        df_chunk_clean = sanitize_bureau(df_chunk)
-
-        if first_chunk:
-            save_dataframe_to_postgres(df_chunk_clean, output_table, conn_id)
-            first_chunk = False
+    print(f"Limpando '{input_table}' -> '{output_table}' (ELT via SQL dinâmico)...")
+    cols = get_table_columns(cursor, input_table)
+    
+    select_exprs = []
+    for col in cols:
+        if col in ["credit_active", "credit_type"]:
+            select_exprs.append(f'TRIM(CAST("{col}" AS TEXT)) AS "{col}"')
+        elif col in ["amt_credit_sum", "amt_credit_sum_debt", "amt_credit_sum_overdue", "credit_day_overdue", "cnt_credit_prolong"]:
+            select_exprs.append(f'COALESCE(CAST("{col}" AS NUMERIC), 0) AS "{col}"')
+        elif col in ["days_credit", "days_credit_update"]:
+            select_exprs.append(f'CAST("{col}" AS NUMERIC) AS "{col}"')
         else:
-            append_dataframe_to_postgres(df_chunk_clean, output_table, conn_id)
+            select_exprs.append(f'"{col}"')
 
+    log_row_count(cursor, input_table, "Entrada")
+    
+    sql_elt = f"""
+    DROP TABLE IF EXISTS "{output_table}" CASCADE;
+    CREATE TABLE "{output_table}" AS
+    SELECT {", ".join(select_exprs)} FROM "{input_table}";
+    """
+
+    cursor.execute(sql_elt)
+    conn.commit()
+    log_row_count(cursor, output_table, "Saída")
+    cursor.close()
     conn.close()
-    print(
-        f"--- Bureau materializado com sucesso na tabela '{output_table}'! ---"
-    )
+    print(f"--- Bureau limpo! Tabela '{output_table}' ---")
 
-if __name__ == "__main__":
-    print("🚀 Executando pipeline de sanitização v2 direto no banco...")
 
-    # 1. Altere com os dados reais do seu banco Postgres de teste/desenvolvimento
-    # Formato: postgresql://usuario:senha@host:porta/nome_do_banco
-    DB_URI = "postgresql://postgres:suasenha@localhost:5432/home_credit"
+# ---------------------------------------------------------------------------
+# installments_payments
+# ---------------------------------------------------------------------------
+def run_installments_sanitization(conn_id: str, input_table: str, output_table: str):
+    """Filtro de linhas válidas em SQL nativo."""
+    conn = get_database_connection(conn_id)
+    cursor = conn.cursor()
 
-    # 2. Roda a sanitização da tabela principal (leitura inteira + estatísticas globais)
-    run_sanitization(
-        conn_id=DB_URI,
-        input_table="application_train",  # Nome da sua tabela crua no banco
-        output_table="application_clean",  # Tabela destino que será criada
-    )
+    print(f"Filtrando '{input_table}' -> '{output_table}' (ELT)...")
+    log_row_count(cursor, input_table, "Entrada")
 
-    # 3. Roda a materialização do Prep (em blocos de 50k linhas)
-    run_prev_sanitization(
-        conn_id=DB_URI,
-        input_table="previous_application",  # Nome da sua tabela crua no banco
-        output_table="previous_application_clean",  # Tabela destino que será criada
-        chunk_size=50000,
-    )
-
-    # 4. Roda a materialização do Bureau (em blocos de 50k linhas)
-    run_bureau_sanitization(
-        conn_id=DB_URI,
-        input_table="bureau",  # Nome da sua tabela crua no banco
-        output_table="bureau_clean_v2",  # Tabela destino que será criada
-        chunk_size=50000,
-    )
-
-    print("🏁 Execução concluída!")
+    cursor.execute(f'DROP TABLE IF EXISTS "{output_table}" CASCADE;')
+    cursor.execute(f"""
+        CREATE TABLE "{output_table}" AS
+        SELECT
+            sk_id_curr, sk_id_prev,
+            num_instalment_version, num_instalment_number,
+            days_instalment, days_entry_payment,
+            amt_instalment, amt_payment
+        FROM "{input_table}"
+        WHERE sk_id_curr IS NOT NULL
+          AND sk_id_prev IS NOT NULL
+          AND days_instalment IS NOT NULL
+          AND amt_instalment IS NOT NULL;
+    """)
+    conn.commit()
+    log_row_count(cursor, output_table, "Saída")
+    cursor.close()
+    conn.close()
+    print(f"--- Installments filtrado! Tabela '{output_table}' ---")
