@@ -144,6 +144,8 @@ services:
       CREDIT_POLICY_VERSION: demo-v1
     depends_on:
       - postgres
+    volumes:
+      - ./Model/artifacts:/app/Model/artifacts:ro
 
   # ---------------------------------------------------------------------------
   # MLOPS - INTERFACE DE DEMONSTRAÇÃO

@@ -11,12 +11,12 @@
     "class_weight": "balanced"
   },
   "test_metrics": {
-    "roc_auc": 0.765,
-    "gini": 0.53,
-    "ks": 0.4051,
-    "average_precision": 0.2563,
-    "brier": 0.1909
+    "roc_auc": 0.7593,
+    "gini": 0.5185,
+    "ks": 0.398,
+    "average_precision": 0.2426,
+    "brier": 0.1908
   },
   "decision_threshold": 0.5,
-  "trained_at_utc": "2026-07-10T21:37:37+00:00"
+  "trained_at_utc": "2026-07-12T12:49:55+00:00"
 }
