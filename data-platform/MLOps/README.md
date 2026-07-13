@@ -305,7 +305,6 @@ O exemplo é abreviado para leitura; uma chamada válida deve incluir todas as f
   "customer_id": null,
   "risk_score": 0.55,
   "predicted_class": 1,
-  "model_decision_threshold": 0.5,
   "policy": {
     "recommendation": "manual_review",
     "reason": "Score na faixa intermediária; requer análise humana.",

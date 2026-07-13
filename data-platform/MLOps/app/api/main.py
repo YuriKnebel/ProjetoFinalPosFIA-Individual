@@ -224,6 +224,5 @@ def _predict(
         customer_id=customer_id,
         risk_score=risk_score,
         predicted_class=predicted_class,
-        model_decision_threshold=prediction_service.decision_threshold,
         policy=asdict(policy_decision),
     )
