@@ -1,19 +1,30 @@
 {
+  "ingestion_table": {
+      "using_csv": [
+        { "table_name": "application_train", "chunk_size": 150000 },
+        { "table_name": "previous_application", "chunk_size": 300000 },
+        { "table_name": "bureau", "chunk_size": 150000 },
+        { "table_name": "installments_payments", "chunk_size": 600000 }
+      ]
+  },
   "database": {
     "input_table": "application_train",
     "output_table": "application_clean",
     "input_prev_table": "previous_application",
     "output_prev_table": "previous_application_clean",
+    "input_bureau_table": "bureau",
+    "output_bureau_table": "bureau_clean",
+    "input_installments_table": "installments_payments",
+    "output_installments_table": "installments_clean",
     "abt_table": "application_abt"
   },
-  "cleaning_parameters": {
-    "chunk_size": 50000,
-    "days_employed_anomaly": 365243,
-    "columns_to_absolute": [
-      "days_birth",
-      "days_employed",
-      "days_registration",
-      "days_id_publish"
-    ]
+  "indexes": {
+    "application_train": "sk_id_curr",
+    "previous_application": "sk_id_prev",
+    "bureau": "sk_id_bureau"
+  },
+  "sanitization": {
+    "cardinalidade_min_freq": 500,
+    "income_winsor_q": 0.99
   }
 }
