@@ -121,7 +121,6 @@ def show_result(result: dict[str, Any]) -> None:
     st.progress(score, text="Posição do cliente na escala de risco do modelo")
 
     st.caption(
-        f"Limiar do modelo: {result['model_decision_threshold']:.2f} · "
         f"Política: {policy['policy_version']} · "
         f"Aprovar abaixo de {policy['approve_max_score']:.2f} · "
         f"Reprovar a partir de {policy['manual_review_max_score']:.2f}"
