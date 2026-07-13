@@ -5,7 +5,7 @@ from MLOps.app.api.credit_policy import CreditPolicy
 
 class CreditPolicyTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.policy = CreditPolicy(0.35, 0.65, "test-v1")
+        self.policy = CreditPolicy(0.50, 0.60, "test-v1")
 
     def test_approve(self) -> None:
         self.assertEqual(self.policy.evaluate(0.20).recommendation, "approve")
