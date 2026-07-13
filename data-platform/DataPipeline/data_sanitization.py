@@ -1,148 +1,224 @@
-import os
-import json
-import io
-import numpy as np
-import pandas as pd
-from airflow.providers.postgres.hooks.postgres import PostgresHook
+# -*- coding: utf-8 -*-
+"""
+data_sanitization.py — Limpeza e padronização (Home Credit) via ELT (SQL Puro)
+Processamento transferido 100% para dentro do PostgreSQL.
+Funções puras: todas as configurações são recebidas por parâmetro via DAG (Airflow).
+"""
+from utils import get_database_connection, log_row_count
 
-def load_config(config_path: str) -> dict:
-    with open(config_path, "r") as f:
-        return json.load(f)
+def get_table_columns(cursor, table_name: str) -> list:
+    """Busca dinamicamente a lista de colunas de uma tabela no PostgreSQL."""
+    cursor.execute(f"""
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = '{table_name}'
+        ORDER BY ordinal_position;
+    """)
+    return [row[0] for row in cursor.fetchall()]
 
-def sanitize_data(df: pd.DataFrame, config: dict) -> pd.DataFrame:
-    df_clean = df.copy()
-    params = config["cleaning_parameters"]
-
-    if "days_employed" in df_clean.columns:
-        df_clean["days_employed_anom"] = (df_clean["days_employed"] == params["days_employed_anomaly"]).astype(int)
-        df_clean["days_employed"] = df_clean["days_employed"].replace(params["days_employed_anomaly"], np.nan)
-
-    for col in params["columns_to_absolute"]:
-        if col in df_clean.columns:
-            df_clean[col] = np.abs(df_clean[col])
-
-    for col in ["days_employed", "days_birth", "days_registration", "days_id_publish"]:
-        if col in df_clean.columns:
-            try:
-                df_clean[col] = df_clean[col].astype("Int64")
-            except:
-                df_clean[col] = np.round(df_clean[col])
-                df_clean[col] = (df_clean[col].dt.days if hasattr(df_clean[col], "dt") else df_clean[col])  
-                df_clean[col] = (df_clean[col].apply(lambda x: str(int(x)) if pd.notnull(x) else ""))
-    
-    string_cols = df_clean.select_dtypes(include=["object"]).columns
-    for col in string_cols:
-        if col not in ["days_employed","days_birth","days_registration","days_id_publish"]:
-            df_clean[col] = df_clean[col].astype(str).str.strip()
-
-    return df_clean
-
-def create_clean_table_schema(cursor, source_table: str, target_table: str):
-    cursor.execute(f'DROP TABLE IF EXISTS "{target_table}" CASCADE;')
-    cursor.execute(f'CREATE TABLE "{target_table}" (LIKE "{source_table}" INCLUDING ALL);')
-    cursor.execute(f'ALTER TABLE "{target_table}" ADD COLUMN IF NOT EXISTS "days_employed_anom" INTEGER;')
-
-def run_sanitization(conn_id: str):
-    """Função mestre que será chamada nativamente pela Task do Airflow."""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(base_dir, "config_pipeline.json")
-    config = load_config(config_path)
-
-    # O PostgresHook agora roda dentro do contexto correto e vai achar o banco na hora!
-    pg_hook = PostgresHook(postgres_conn_id=conn_id)
-    conn = pg_hook.get_conn()
+# ---------------------------------------------------------------------------
+# application_train
+# ---------------------------------------------------------------------------
+def run_sanitization(conn_id: str, input_table: str, output_table: str, min_freq: int, winsor_q: float):
+    """Higieniza application_train usando SQL nativo para estatísticas globais e regras lógicas."""
+    conn = get_database_connection(conn_id)
     cursor = conn.cursor()
 
-    input_table = config["database"]["input_table"]
-    output_table = config["database"]["output_table"]
-    chunk_size = config["cleaning_parameters"]["chunk_size"]
+    print(f"Limpando '{input_table}' -> '{output_table}' (ELT via PostgreSQL)...")
+    
+    log_row_count(cursor, input_table, "Entrada")
+    
+    sql_elt = f"""
+    DROP TABLE IF EXISTS "{output_table}" CASCADE;
+    
+    CREATE TABLE "{output_table}" AS
+    WITH global_stats AS (
+        SELECT
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY ext_source_1) AS median_es1,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY ext_source_2) AS median_es2,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY ext_source_3) AS median_es3,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY (COALESCE(ext_source_1, 0) + COALESCE(ext_source_2, 0) + COALESCE(ext_source_3, 0))/3.0) AS median_es_mean,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY days_last_phone_change) AS median_phone,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY cnt_fam_members) AS median_fam,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY amt_annuity) AS median_annuity,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY NULLIF(amt_income_total, 0)) AS median_income,
+            percentile_cont({winsor_q}) WITHIN GROUP (ORDER BY NULLIF(amt_income_total, 0)) AS p99_income,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY own_car_age) FILTER (WHERE TRIM(flag_own_car) = 'Y') AS median_car_age
+        FROM "{input_table}"
+    ),
+    valid_orgs AS (
+        SELECT organization_type FROM "{input_table}" GROUP BY 1 HAVING COUNT(*) >= {min_freq}
+    ),
+    valid_incs AS (
+        SELECT name_income_type FROM "{input_table}" GROUP BY 1 HAVING COUNT(*) >= {min_freq}
+    )
+    SELECT
+        CAST(app.sk_id_curr AS BIGINT) AS sk_id_curr,
+        CAST(app.target AS BIGINT) AS target,
 
-    print(f"Preparando tabela de destino '{output_table}'...")
-    create_clean_table_schema(cursor, input_table, output_table)
+        COALESCE(app.ext_source_1, stats.median_es1) AS ext_source_1,
+        COALESCE(app.ext_source_2, stats.median_es2) AS ext_source_2,
+        COALESCE(app.ext_source_3, stats.median_es3) AS ext_source_3,
+        
+        COALESCE(
+            (COALESCE(app.ext_source_1, stats.median_es1) + 
+             COALESCE(app.ext_source_2, stats.median_es2) + 
+             COALESCE(app.ext_source_3, stats.median_es3)) / 3.0, 
+        stats.median_es_mean) AS ext_source_mean,
+
+        CAST(app.region_rating_client_w_city AS BIGINT) AS region_rating_client_w_city,
+        COALESCE(app.days_last_phone_change, stats.median_phone) AS days_last_phone_change,
+        app.days_id_publish,
+        app.days_registration,
+
+        COALESCE(app.reg_city_not_work_city, 0) AS reg_city_not_work_city,
+        COALESCE(app.reg_city_not_live_city, 0) AS reg_city_not_live_city,
+        COALESCE(app.live_city_not_work_city, 0) AS live_city_not_work_city,
+
+        CASE WHEN TRIM(app.flag_own_car) = 'Y' THEN 1 ELSE 0 END AS has_car,
+        CASE 
+            WHEN TRIM(app.flag_own_car) = 'Y' THEN COALESCE(app.own_car_age, stats.median_car_age) 
+            ELSE 0 
+        END AS own_car_age,
+
+        COALESCE(app.def_60_cnt_social_circle, 0) AS def_60_cnt_social_circle,
+        COALESCE(app.amt_req_credit_bureau_year, 0) AS amt_req_credit_bureau_year,
+        CAST(COALESCE(app.cnt_children, 0) AS INTEGER) AS cnt_children,
+        COALESCE(app.cnt_fam_members, stats.median_fam) AS cnt_fam_members,
+
+        LEAST(
+            COALESCE(NULLIF(app.amt_income_total, 0), stats.median_income), 
+            stats.p99_income
+        ) AS amt_income_total,
+        
+        app.amt_credit,
+        COALESCE(app.amt_annuity, stats.median_annuity) AS amt_annuity,
+
+        COALESCE(TRIM(app.occupation_type), 'Unknown') AS occupation_type,
+        CASE WHEN o.organization_type IS NOT NULL THEN TRIM(app.organization_type) ELSE 'Other_low_freq' END AS organization_type,
+        CASE WHEN i.name_income_type IS NOT NULL THEN TRIM(app.name_income_type) ELSE 'Other_low_freq' END AS name_income_type,
+        COALESCE(TRIM(app.name_education_type), 'Unknown') AS name_education_type,
+        COALESCE(REPLACE(TRIM(app.code_gender), 'XNA', 'Unknown'), 'Unknown') AS code_gender,
+
+        ABS(app.days_birth) / 365.25 AS age,
+        CASE WHEN app.days_employed = 365243 THEN 0 ELSE ABS(app.days_employed) / 365.25 END AS years_employed,
+        CASE WHEN app.days_employed = 365243 THEN 1 ELSE 0 END AS days_employed_anom
+
+    FROM "{input_table}" app
+    CROSS JOIN global_stats stats
+    LEFT JOIN valid_orgs o ON app.organization_type = o.organization_type
+    LEFT JOIN valid_incs i ON app.name_income_type = i.name_income_type;
+    """
+    
+    cursor.execute(sql_elt)
     conn.commit()
-
-    offset = 0
-    print(f"Iniciando processamento em lotes nativo...")
-
-    while True:
-        query = f'SELECT * FROM "{input_table}" LIMIT {chunk_size} OFFSET {offset};'
-        chunk_df = pd.read_sql(query, conn)
-
-        if chunk_df.empty:
-            break
-
-        print(f"Processando lote (Offset: {offset}, Linhas: {len(chunk_df)})...")
-        cleaned_df = sanitize_data(chunk_df, config)
-
-        output = io.StringIO()
-        cleaned_df.to_csv(output, sep="\t", header=False, index=False)
-        output.seek(0)
-
-        cursor.copy_expert(
-            f'COPY "{output_table}" FROM STDIN WITH CSV DELIMITER \'\t\' NULL \'\'', output
-        )
-        conn.commit()
-
-        offset += chunk_size
-
+    log_row_count(cursor, output_table, "Saída")
     cursor.close()
     conn.close()
-    print("--- Pipeline de sanitização finalizado com sucesso! ---")
+    print(f"--- Application Train higienizado! Tabela: '{output_table}' ---")
 
 
-def sanitize_prev_data(df: pd.DataFrame) -> pd.DataFrame:
-    df_clean = df.copy()
-    
-    # 1. Padroniza colunas de texto cruciais
-    if "name_contract_status" in df_clean.columns:
-        df_clean["name_contract_status"] = df_clean["name_contract_status"].astype(str).str.strip().str.title()
-        
-    # 2. Trata valores nulos ou negativos no valor pedido (amt_application)
-    if "amt_application" in df_clean.columns:
-        df_clean["amt_application"] = df_clean["amt_application"].fillna(0)
-        df_clean["amt_application"] = np.where(df_clean["amt_application"] < 0, 0, df_clean["amt_application"])
-        
-    return df_clean
-
-def run_prev_sanitization(conn_id: str):
-    """Função mestre para limpar a tabela previous_application em lotes."""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(base_dir, "config_pipeline.json")
-    config = load_config(config_path)
-
-    pg_hook = PostgresHook(postgres_conn_id=conn_id)
-    conn = pg_hook.get_conn()
+# ---------------------------------------------------------------------------
+# previous_application 
+# ---------------------------------------------------------------------------
+def run_prev_sanitization(conn_id: str, input_table: str, output_table: str):
+    """Constrói SQL dinâmico para limpar previous_application preservando colunas não alteradas."""
+    conn = get_database_connection(conn_id)
     cursor = conn.cursor()
 
-    input_table = config["database"]["input_prev_table"]
-    output_table = config["database"]["output_prev_table"]
-    chunk_size = config["cleaning_parameters"]["chunk_size"]
+    print(f"Limpando '{input_table}' -> '{output_table}' (ELT via SQL dinâmico)...")
+    cols = get_table_columns(cursor, input_table)
+    
+    select_exprs = []
+    for col in cols:
+        if col == "name_contract_status":
+            select_exprs.append(f'INITCAP(TRIM("{col}")) AS "{col}"')
+        elif col == "amt_application":
+            select_exprs.append(f'GREATEST(COALESCE("{col}", 0), 0) AS "{col}"')
+        else:
+            select_exprs.append(f'"{col}"')
 
-    print(f"Preparando tabela de destino histórica '{output_table}'...")
+    log_row_count(cursor, input_table, "Entrada")
+
+    sql_elt = f"""
+    DROP TABLE IF EXISTS "{output_table}" CASCADE;
+    CREATE TABLE "{output_table}" AS
+    SELECT {", ".join(select_exprs)} FROM "{input_table}";
+    """
+
+    cursor.execute(sql_elt)
+    conn.commit()
+    log_row_count(cursor, output_table, "Saída")
+    cursor.close()
+    conn.close()
+    print(f"--- Previous Application limpo! Tabela '{output_table}' ---")
+
+
+# ---------------------------------------------------------------------------
+# bureau 
+# ---------------------------------------------------------------------------
+def run_bureau_sanitization(conn_id: str, input_table: str, output_table: str):
+    """Constrói SQL dinâmico para limpar bureau preservando colunas não alteradas."""
+    conn = get_database_connection(conn_id)
+    cursor = conn.cursor()
+
+    print(f"Limpando '{input_table}' -> '{output_table}' (ELT via SQL dinâmico)...")
+    cols = get_table_columns(cursor, input_table)
+    
+    select_exprs = []
+    for col in cols:
+        if col in ["credit_active", "credit_type"]:
+            select_exprs.append(f'TRIM(CAST("{col}" AS TEXT)) AS "{col}"')
+        elif col in ["amt_credit_sum", "amt_credit_sum_debt", "amt_credit_sum_overdue", "credit_day_overdue", "cnt_credit_prolong"]:
+            select_exprs.append(f'COALESCE(CAST("{col}" AS NUMERIC), 0) AS "{col}"')
+        elif col in ["days_credit", "days_credit_update"]:
+            select_exprs.append(f'CAST("{col}" AS NUMERIC) AS "{col}"')
+        else:
+            select_exprs.append(f'"{col}"')
+
+    log_row_count(cursor, input_table, "Entrada")
+    
+    sql_elt = f"""
+    DROP TABLE IF EXISTS "{output_table}" CASCADE;
+    CREATE TABLE "{output_table}" AS
+    SELECT {", ".join(select_exprs)} FROM "{input_table}";
+    """
+
+    cursor.execute(sql_elt)
+    conn.commit()
+    log_row_count(cursor, output_table, "Saída")
+    cursor.close()
+    conn.close()
+    print(f"--- Bureau limpo! Tabela '{output_table}' ---")
+
+
+# ---------------------------------------------------------------------------
+# installments_payments
+# ---------------------------------------------------------------------------
+def run_installments_sanitization(conn_id: str, input_table: str, output_table: str):
+    """Filtro de linhas válidas em SQL nativo."""
+    conn = get_database_connection(conn_id)
+    cursor = conn.cursor()
+
+    print(f"Filtrando '{input_table}' -> '{output_table}' (ELT)...")
+    log_row_count(cursor, input_table, "Entrada")
+
     cursor.execute(f'DROP TABLE IF EXISTS "{output_table}" CASCADE;')
-    cursor.execute(f'CREATE TABLE "{output_table}" (LIKE "{input_table}" INCLUDING ALL);')
+    cursor.execute(f"""
+        CREATE TABLE "{output_table}" AS
+        SELECT
+            sk_id_curr, sk_id_prev,
+            num_instalment_version, num_instalment_number,
+            days_instalment, days_entry_payment,
+            amt_instalment, amt_payment
+        FROM "{input_table}"
+        WHERE sk_id_curr IS NOT NULL
+          AND sk_id_prev IS NOT NULL
+          AND days_instalment IS NOT NULL
+          AND amt_instalment IS NOT NULL;
+    """)
     conn.commit()
-
-    offset = 0
-    print("Iniciando sanitização do histórico em lotes...")
-
-    while True:
-        query = f'SELECT * FROM "{input_table}" LIMIT {chunk_size} OFFSET {offset};'
-        chunk_df = pd.read_sql(query, conn)
-
-        if chunk_df.empty:
-            break
-
-        cleaned_df = sanitize_prev_data(chunk_df)
-
-        output = io.StringIO()
-        cleaned_df.to_csv(output, sep="\t", header=False, index=False)
-        output.seek(0)
-
-        cursor.copy_expert(f'COPY "{output_table}" FROM STDIN WITH CSV DELIMITER \'\t\' NULL \'\'', output)
-        conn.commit()
-        offset += chunk_size
-
+    log_row_count(cursor, output_table, "Saída")
     cursor.close()
     conn.close()
-    print(f"--- Histórico limpo com sucesso na tabela '{output_table}' ---")
+    print(f"--- Installments filtrado! Tabela '{output_table}' ---")

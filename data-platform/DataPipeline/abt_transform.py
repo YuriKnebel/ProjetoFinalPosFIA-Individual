@@ -1,129 +1,181 @@
+# -*- coding: utf-8 -*-
+"""
+Módulo responsável pela construção da Analytical Base Table (ABT).
+
+Este módulo utiliza a arquitetura ELT (Extract, Load, Transform), empurrando 
+todo o processamento de agregações e JOINs para o motor do PostgreSQL.
+Inclui a criação de índices intermediários e logs de volumetria.
+"""
 import os
 import json
-import io
-import pandas as pd
-from airflow.providers.postgres.hooks.postgres import PostgresHook
+from utils import get_database_connection, log_row_count
+
+# --- TASKS INTERMEDIÁRIAS (AGREGAÇÕES EM SQL NO BANCO) ---
+def create_agg_previous_application(conn_id: str, output_prev_table: str):
+    """Agrega o histórico de aplicações anteriores por cliente (sk_id_curr)."""
+    tbl_dest = "tmp_prev_application_agg"
+    conn = get_database_connection(conn_id)
+    cur = conn.cursor()
+    
+    print(f"[AGREGAÇÃO] Processando '{output_prev_table}' -> '{tbl_dest}'...")
+    log_row_count(cur, output_prev_table, "Base Histórica Bruta")
+    
+    cur.execute(f'DROP TABLE IF EXISTS "{tbl_dest}" CASCADE;')
+    cur.execute(f"""
+        CREATE TABLE "{tbl_dest}" AS
+        SELECT
+            sk_id_curr,
+            SUM(CASE WHEN name_contract_status = 'Refused' THEN 1 ELSE 0 END)::float
+                / NULLIF(COUNT(sk_id_prev), 0) AS prev_refused_rate
+        FROM "{output_prev_table}"
+        GROUP BY sk_id_curr;
+    """)
+    conn.commit()
+    
+    # Criação de índice para acelerar o JOIN final
+    cur.execute(f'CREATE INDEX idx_{tbl_dest}_curr ON "{tbl_dest}" (sk_id_curr);')
+    conn.commit()
+    
+    log_row_count(cur, tbl_dest, "Agregado por Cliente")
+    cur.close()
+    conn.close()
 
 
-def load_config(config_path: str) -> dict:
-    with open(config_path, "r") as f:
-        return json.load(f)
+def create_agg_bureau(conn_id: str, output_bureau_table: str):
+    """Agrega bureau_clean por cliente trazendo todas as métricas necessárias para o modelo."""
+    tbl_dest = "tmp_bureau_agg"
+    conn = get_database_connection(conn_id)
+    cur = conn.cursor()
+    
+    print(f"[AGREGAÇÃO] Processando '{output_bureau_table}' -> '{tbl_dest}'...")
+    log_row_count(cur, output_bureau_table, "Base Histórica Bruta")
+    
+    cur.execute(f'DROP TABLE IF EXISTS "{tbl_dest}" CASCADE;')
+    cur.execute(f"""
+        CREATE TABLE "{tbl_dest}" AS
+        SELECT
+            sk_id_curr,
+            COUNT(sk_id_bureau) AS bureau_credit_count,
+            AVG(days_credit) AS bureau_avg_days_credit,
+            MAX(days_credit) AS bureau_last_days_credit,
+            SUM(CASE WHEN credit_active = 'Active' THEN 1 ELSE 0 END)::float 
+                / NULLIF(COUNT(sk_id_bureau), 0) AS bureau_active_rate,
+            SUM(CASE WHEN credit_active = 'Active' THEN 1 ELSE 0 END) AS bureau_active_count,
+            SUM(CASE WHEN credit_active = 'Closed' THEN 1 ELSE 0 END)::float 
+                / NULLIF(COUNT(sk_id_bureau), 0) AS bureau_closed_rate,
+            SUM(COALESCE(amt_credit_sum_debt, 0)) 
+                / NULLIF(SUM(COALESCE(amt_credit_sum, 0)), 0) AS bureau_debt_credit_ratio,
+            SUM(CASE WHEN COALESCE(credit_day_overdue, 0) > 0 THEN 1 ELSE 0 END) AS bureau_overdue_count
+        FROM "{output_bureau_table}"
+        GROUP BY sk_id_curr;
+    """)
+    conn.commit()
+    
+    cur.execute(f'CREATE INDEX idx_{tbl_dest}_curr ON "{tbl_dest}" (sk_id_curr);')
+    conn.commit()
+    
+    log_row_count(cur, tbl_dest, "Agregado por Cliente")
+    cur.close()
+    conn.close()
 
 
-def build_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Gera novas variáveis explicativas (Engenharia de Features) para a ABT."""
-    df_features = df.copy()
-
-    # Evitando divisão por zero
-    if "amt_income_total" in df_features.columns:
-        df_features["amt_income_total"] = df_features["amt_income_total"].replace(0, 0.001)
-
-    if "amt_credit" in df_features.columns and "amt_income_total" in df_features.columns:
-        df_features["fe_credit_income_percent"] = (df_features["amt_credit"] / df_features["amt_income_total"])
-
-    if "amt_annuity" in df_features.columns and "amt_income_total" in df_features.columns:
-        df_features["fe_annuity_income_percent"] = (df_features["amt_annuity"] / df_features["amt_income_total"])
-
-    if "cnt_fam_members" in df_features.columns and "amt_income_total" in df_features.columns:
-        df_features["cnt_fam_members"] = df_features["cnt_fam_members"].fillna(1).replace(0, 1)
-        df_features["fe_income_per_person"] = (df_features["amt_income_total"] / df_features["cnt_fam_members"])
-
-    return df_features
-
-
-def create_abt_table_schema(cursor, sample_df: pd.DataFrame, target_table: str):
-    """Cria a estrutura da tabela ABT dinamicamente baseada nas colunas do DataFrame."""
-    colunas = []
-    for col, dtype in zip(sample_df.columns, sample_df.dtypes):
-        if "int" in str(dtype).lower():
-            pg_type = "BIGINT"
-        elif "float" in str(dtype).lower():
-            pg_type = "DOUBLE PRECISION"
-        elif "bool" in str(dtype).lower():
-            pg_type = "BOOLEAN"
-        else:
-            pg_type = "TEXT"
-        colunas.append(f'"{col}" {pg_type}')
-
-    cursor.execute(f'DROP TABLE IF EXISTS "{target_table}" CASCADE;')
-    sql_create = f'CREATE TABLE "{target_table}" ({", ".join(colunas)});'
-    cursor.execute(sql_create)
+def create_agg_installments(conn_id: str, output_installments_table: str):
+    """Agrega installments_clean por cliente no Postgres."""
+    tbl_dest = "tmp_installments_agg"
+    conn = get_database_connection(conn_id)
+    cur = conn.cursor()
+    
+    print(f"[AGREGAÇÃO] Processando '{output_installments_table}' -> '{tbl_dest}'...")
+    log_row_count(cur, output_installments_table, "Base Histórica Bruta")
+    
+    cur.execute(f'DROP TABLE IF EXISTS "{tbl_dest}" CASCADE;')
+    cur.execute(f"""
+        CREATE TABLE "{tbl_dest}" AS
+        SELECT
+            sk_id_curr,
+            AVG(CASE WHEN (days_entry_payment - days_instalment) > 0 THEN 1.0 ELSE 0.0 END)
+                AS inst_late_payment_rate
+        FROM "{output_installments_table}"
+        GROUP BY sk_id_curr;
+    """)
+    conn.commit()
+    
+    cur.execute(f'CREATE INDEX idx_{tbl_dest}_curr ON "{tbl_dest}" (sk_id_curr);')
+    conn.commit()
+    
+    log_row_count(cur, tbl_dest, "Agregado por Cliente")
+    cur.close()
+    conn.close()
 
 
-def run_abt_generation(conn_id: str):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(base_dir, "config_pipeline.json")
-    config = load_config(config_path)
-
-    pg_hook = PostgresHook(postgres_conn_id=conn_id)
-    conn = pg_hook.get_conn()
+# --- PIPELINE PRINCIPAL (ELT FINAL) ---
+def run_abt_generation(conn_id: str, config: dict):
+    """Monta a ABT final via SQL puro unindo a aplicação limpa com os agregados intermediários."""
+    clean_table = config.get("output_table")
+    abt_table = config.get("abt_table")
+    
+    conn = get_database_connection(conn_id)
     cursor = conn.cursor()
 
-    input_table = config["database"]["output_table"]
-    output_table = config["database"]["abt_table"]
-    chunk_size = config["cleaning_parameters"]["chunk_size"]
+    print(f"[ELT] Construindo a tabela final ABT '{abt_table}' a partir de '{clean_table}'...")
+    log_row_count(cursor, clean_table, "Entrada Application Clean")
 
-    print(f"Iniciando a construção da ABT rica com dados de 'previous_application'...")
+    cursor.execute(f'DROP TABLE IF EXISTS "{abt_table}" CASCADE;')
+    
+    sql_elt = f"""
+    CREATE TABLE "{abt_table}" AS
+    SELECT 
+        a.*,
+        
+        -- 2. Features Derivadas da Renda (Tratando divisão por zero)
+        CASE WHEN COALESCE(a.amt_income_total, 0) > 0 THEN a.amt_credit / a.amt_income_total ELSE NULL END AS fe_credit_income_percent,
+        CASE WHEN COALESCE(a.amt_income_total, 0) > 0 THEN a.amt_annuity / a.amt_income_total ELSE NULL END AS fe_annuity_income_percent,
 
-    offset = 0
-    is_first_chunk = True
+        -- 3. Features Agregadas de Previous Application
+        CASE WHEN p.sk_id_curr IS NOT NULL THEN 1 ELSE 0 END AS has_prev_app,
+        COALESCE(p.prev_refused_rate, 0) AS prev_refused_rate,
+        
+        -- 4. Features Agregadas de Bureau
+        CASE WHEN b.sk_id_curr IS NOT NULL THEN 1 ELSE 0 END AS has_bureau,
+        COALESCE(b.bureau_avg_days_credit, 0) AS bureau_avg_days_credit,
+        COALESCE(b.bureau_last_days_credit, 0) AS bureau_last_days_credit,
+        COALESCE(b.bureau_active_rate, 0) AS bureau_active_rate,
+        COALESCE(b.bureau_active_count, 0) AS bureau_active_count,
+        COALESCE(b.bureau_closed_rate, 0) AS bureau_closed_rate,
+        COALESCE(b.bureau_debt_credit_ratio, 0) AS bureau_debt_credit_ratio,
+        COALESCE(b.bureau_overdue_count, 0) AS bureau_overdue_count,
+        
+        -- 5. Features Agregadas de Installments (Parcelas)
+        CASE WHEN i.sk_id_curr IS NOT NULL THEN 1 ELSE 0 END AS has_installments_history,
+        COALESCE(i.inst_late_payment_rate, 0) AS inst_late_payment_rate
 
-    query_base = f"""
-        SELECT 
-            app.*,
-            COALESCE(prev.prev_contract_count, 0) AS prev_contract_count,
-            COALESCE(prev.prev_refused_count, 0) AS prev_refused_count,
-            COALESCE(prev.prev_avg_amt_approved, 0) AS prev_avg_amt_approved,
-            COALESCE(prev.prev_avg_amt_refused, 0) AS prev_avg_amt_refused
-        FROM "{input_table}" app
-        LEFT JOIN (
-            SELECT 
-                sk_id_curr,
-                COUNT(sk_id_prev) AS prev_contract_count,
-                SUM(CASE WHEN name_contract_status = 'Refused' THEN 1 ELSE 0 END) AS prev_refused_count,
-                
-                -- Média dos valores dos contratos que foram aprovados
-                AVG(CASE WHEN name_contract_status = 'Approved' THEN amt_application END) AS prev_avg_amt_approved,
-                
-                -- Média dos valores dos contratos que foram recusados
-                AVG(CASE WHEN name_contract_status = 'Refused' THEN amt_application END) AS prev_avg_amt_refused
-            FROM previous_application_clean
-            GROUP BY sk_id_curr
-        ) prev ON app.sk_id_curr = prev.sk_id_curr
-        LIMIT {chunk_size} OFFSET %s;
+    FROM "{clean_table}" a
+    LEFT JOIN tmp_prev_application_agg p ON a.sk_id_curr = p.sk_id_curr
+    LEFT JOIN tmp_bureau_agg b ON a.sk_id_curr = b.sk_id_curr
+    LEFT JOIN tmp_installments_agg i ON a.sk_id_curr = i.sk_id_curr;
     """
 
-    while True:
-        # Passamos o offset de forma segura como parâmetro do cursor
-        chunk_df = pd.read_sql(query_base, conn, params=(offset,))
-
-        if chunk_df.empty:
-            break
-
-        print(f"Processando lote enriquecido (Offset: {offset}) para a ABT...")
-        abt_chunk = build_features(chunk_df)
-
-        if is_first_chunk:
-            create_abt_table_schema(cursor, abt_chunk, output_table)
-            conn.commit()
-            is_first_chunk = False
-
-        # Carga rápida padrão que você validou
-        output = io.StringIO()
-        abt_chunk.to_csv(output, sep="\t", header=False, index=False)
-        output.seek(0)
-
-        cursor.copy_expert(
-            f'COPY "{output_table}" FROM STDIN WITH CSV DELIMITER \'\t\' NULL \'\'', output
-        )
+    try:
+        cursor.execute(sql_elt)
+        conn.commit()
+        
+        print("[LIXEIRA] Limpando tabelas temporárias agregadas...")
+        cursor.execute("DROP TABLE IF EXISTS tmp_prev_application_agg CASCADE;")
+        cursor.execute("DROP TABLE IF EXISTS tmp_bureau_agg CASCADE;")
+        cursor.execute("DROP TABLE IF EXISTS tmp_installments_agg CASCADE;")
         conn.commit()
 
-        offset += chunk_size
+        print(f"[ELT] Sucesso absoluto na geração da ABT!")
+        log_row_count(cursor, abt_table, "ABT Final Pronta para Treino")
 
-    cursor.close()
-    conn.close()
-    print(f"--- ABT Enriquecida Construída com Sucesso! Tabela: '{output_table}' ---")
+    except Exception as e:
+        conn.rollback()
+        raise RuntimeError(f"Erro na execução do processo ELT da ABT: {str(e)}")
+    finally:
+        cursor.close()
+        conn.close()
 
 
 if __name__ == "__main__":
-    run_abt_generation("postgres_data_db")
+    # Teste de execução isolada (fallback) com strings explícitas do ambiente local
+    run_abt_generation("postgres_data_db", "application_clean", "application_abt")
