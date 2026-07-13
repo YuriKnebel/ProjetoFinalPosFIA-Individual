@@ -76,10 +76,10 @@ train.py  ──→  artefato .pkl  ──→  PredictionService  ──→  /mo
 
 Serviço de scoring que expõe o modelo como serviço de predição:
 
-- **carga no startup** — modelo e conexão de banco são inicializados uma vez (`lifespan`) e reutilizados por todas as requisições;
+- **carga resiliente do modelo** — o `lifespan` inicia uma tarefa em segundo plano que tenta carregar e validar o artefato; uma falha é registrada no log e uma nova tentativa ocorre após o intervalo configurado;
 - **documentação viva** — OpenAPI/Swagger em `/docs`, gerada a partir dos contratos de `schemas.py`;
-- **capacidades** — *liveness* (`/health`), metadados de features (`/model/features`), recuperação das features de um cliente (`/customers/{id}/features`) e **dois modos de predição** (por features fornecidas e por cliente armazenado na ABT);
-- **validação e erros tipados** — features obrigatórias ausentes → `422` com a lista; cliente inexistente → `404`; falha de banco → `503`; artefato inválido **impede a subida** do serviço;
+- **capacidades** — prontidão (`/health`), metadados de features (`/model/features`), recuperação das features de um cliente (`/customers/{id}/features`) e **dois modos de predição** (por features fornecidas e por cliente armazenado na ABT);
+- **validação e erros tipados** — features obrigatórias ausentes → `422` com a lista; cliente inexistente → `404`; falha de banco ou modelo indisponível → `503`;
 - **rastreabilidade** — cada predição é registrada em **JSON no stdout** do container (apoio a demonstração e diagnóstico; não substitui auditoria persistente);
 - **separação de decisão** — a resposta traz, junto ao score, a recomendação da política e os limiares que a produziram.
 
@@ -202,7 +202,7 @@ A resposta inclui limites e `policy_version`, tornando explícita a regra que pr
 | Cliente inexistente na ABT | HTTP `404`. |
 | Falha ao consultar PostgreSQL | HTTP `503`. |
 | Features obrigatórias ausentes | HTTP `422` com lista das ausências. |
-| Artefato ausente ou inválido no startup | API não conclui a inicialização. |
+| Artefato ausente ou inválido | A API permanece ativa, registra o erro, repete a carga periodicamente e responde HTTP `503` nos endpoints que dependem do modelo. |
 
 As requisições de predição são registradas em JSON no stdout do container para apoiar demonstração e diagnóstico. Esse registro não substitui uma trilha de auditoria persistente.
 
@@ -232,11 +232,51 @@ docker compose logs -f credit-api credit-frontend
 
 | Método e caminho | Finalidade |
 |---|---|
-| `GET /health` | Informa disponibilidade e carregamento do modelo. |
+| `GET /health` | Verifica se a API está pronta para predição: retorna `200` com o modelo carregado ou `503` enquanto a carga não for concluída. |
 | `GET /model/features` | Lista as features esperadas pelo modelo. |
 | `GET /customers/{customer_id}/features` | Recupera as features de um cliente para edição. |
 | `POST /predict/features` | Calcula o score a partir das features fornecidas. |
 | `POST /predict/customer/{customer_id}` | Recupera o cliente na ABT e calcula o score. |
+
+### Carregamento do modelo e health check
+
+A inicialização do processo da API não depende da presença imediata do artefato.
+Ao subir, o serviço cria uma tarefa em segundo plano para carregar o arquivo
+indicado por `MODEL_PATH`. Se o arquivo estiver ausente, corrompido ou incompatível,
+a exceção e o caminho são registrados no log do `credit-api`. A tarefa aguarda o
+valor definido em `MODEL_LOAD_RETRY_SECONDS` e tenta novamente, sem exigir a
+recriação do container.
+
+Enquanto a carga não for concluída, `GET /health` funciona como uma verificação de
+prontidão e responde HTTP `503`:
+
+```json
+{
+  "detail": {
+    "status": "unavailable",
+    "model_loaded": false,
+    "model_path": "/app/Model/artifacts/lightgbm_abt.pkl",
+    "message": "O artefato do modelo ainda não foi carregado.",
+    "last_error": "Modelo não encontrado: /app/Model/artifacts/lightgbm_abt.pkl"
+  }
+}
+```
+
+O mesmo código `503` protege `/model/features` e os endpoints de predição contra
+uso antes da carga. Quando uma tentativa termina com sucesso, o objeto permanece
+em memória para as requisições seguintes e `/health` passa automaticamente a
+responder HTTP `200`:
+
+```json
+{
+  "status": "ok",
+  "model_loaded": true,
+  "model_path": "/app/Model/artifacts/lightgbm_abt.pkl"
+}
+```
+
+Esse desenho mantém a API observável durante a indisponibilidade, sem declarar o
+serviço pronto antes que ele consiga realizar predições.
 
 ### Estrutura da requisição por features
 

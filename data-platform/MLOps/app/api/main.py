@@ -1,6 +1,9 @@
+import asyncio
 from contextlib import asynccontextmanager
+from contextlib import suppress
 from dataclasses import asdict
 import json
+import logging
 
 from fastapi import FastAPI, HTTPException, Request
 from sqlalchemy import create_engine
@@ -18,13 +21,14 @@ from .schemas import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.validate()
 
     prediction_service = PredictionService(settings.model_path)
-    prediction_service.load()
-
     database_engine = create_engine(settings.database_url, pool_pre_ping=True)
     feature_service = CustomerFeatureService(database_engine)
     credit_policy = CreditPolicy(
@@ -36,10 +40,45 @@ async def lifespan(app: FastAPI):
     app.state.prediction_service = prediction_service
     app.state.feature_service = feature_service
     app.state.credit_policy = credit_policy
+    app.state.model_load_error = None
 
-    yield
+    model_load_task = asyncio.create_task(
+        _load_model_with_retry(
+            app,
+            prediction_service,
+            settings.model_load_retry_seconds,
+        )
+    )
 
-    database_engine.dispose()
+    try:
+        yield
+    finally:
+        model_load_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await model_load_task
+        database_engine.dispose()
+
+
+async def _load_model_with_retry(
+    app: FastAPI,
+    service: PredictionService,
+    retry_seconds: float,
+) -> None:
+    while not service.is_loaded:
+        try:
+            await asyncio.to_thread(service.load)
+        except Exception as error:
+            app.state.model_load_error = str(error)
+            logger.error(
+                "Falha ao carregar o modelo %s: %s. Nova tentativa em %.1f segundos.",
+                service.model_path,
+                error,
+                retry_seconds,
+            )
+            await asyncio.sleep(retry_seconds)
+        else:
+            app.state.model_load_error = None
+            logger.info("Modelo carregado com sucesso: %s", service.model_path)
 
 
 app = FastAPI(
@@ -56,6 +95,18 @@ app = FastAPI(
 @app.get("/health", response_model=HealthResponse)
 def health(request: Request) -> HealthResponse:
     service: PredictionService = request.app.state.prediction_service
+    if not service.is_loaded:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unavailable",
+                "model_loaded": False,
+                "model_path": str(service.model_path),
+                "message": "O artefato do modelo ainda não foi carregado.",
+                "last_error": request.app.state.model_load_error,
+            },
+        )
+
     return HealthResponse(
         status="ok",
         model_loaded=service.is_loaded,
@@ -66,6 +117,7 @@ def health(request: Request) -> HealthResponse:
 @app.get("/model/features", response_model=list[str])
 def model_features(request: Request) -> list[str]:
     service: PredictionService = request.app.state.prediction_service
+    _ensure_model_loaded(service)
     return service.expected_features
 
 
@@ -126,6 +178,14 @@ def predict_from_database(customer_id: int, request: Request) -> PredictionRespo
         request=request,
     )
 
+def _ensure_model_loaded(service: PredictionService) -> None:
+    if service.is_loaded:
+        return
+
+    raise HTTPException(
+        status_code=503,
+        detail="O modelo ainda não está disponível.",
+    )
 
 def _log_request_json(endpoint: str, payload: dict) -> None:
     print(
@@ -143,6 +203,8 @@ def _predict(
 ) -> PredictionResponse:
     prediction_service: PredictionService = request.app.state.prediction_service
     credit_policy: CreditPolicy = request.app.state.credit_policy
+
+    _ensure_model_loaded(prediction_service)
 
     try:
         risk_score, predicted_class = prediction_service.predict(features)
