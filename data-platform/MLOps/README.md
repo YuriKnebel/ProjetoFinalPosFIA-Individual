@@ -135,8 +135,8 @@ MLOps/
 |---|---|---|
 | `MODEL_PATH` | Caminho do artefato LightGBM | `/app/Model/artifacts/lightgbm_abt.pkl` |
 | `DATABASE_URL` | Conexão com o banco `data` | PostgreSQL do Compose |
-| `CREDIT_APPROVE_MAX_SCORE` | Limite superior para aprovação | `0.35` |
-| `CREDIT_MANUAL_REVIEW_MAX_SCORE` | Limite superior para revisão manual | `0.65` |
+| `CREDIT_APPROVE_MAX_SCORE` | Limite superior para aprovação | `0.50` |
+| `CREDIT_MANUAL_REVIEW_MAX_SCORE` | Limite superior para revisão manual | `0.60` |
 | `CREDIT_POLICY_VERSION` | Identificador da política | `demo-v1` |
 | `CREDIT_API_URL` | URL consumida pelo frontend | `http://credit-api:8000` |
 
@@ -263,15 +263,15 @@ O exemplo é abreviado para leitura; uma chamada válida deve incluir todas as f
 {
   "source": "provided_features",
   "customer_id": null,
-  "risk_score": 0.42,
-  "predicted_class": 0,
+  "risk_score": 0.55,
+  "predicted_class": 1,
   "model_decision_threshold": 0.5,
   "policy": {
     "recommendation": "manual_review",
     "reason": "Score na faixa intermediária; requer análise humana.",
     "policy_version": "demo-v1",
-    "approve_max_score": 0.35,
-    "manual_review_max_score": 0.65
+    "approve_max_score": 0.50,
+    "manual_review_max_score": 0.60
   }
 }
 ```
