@@ -139,8 +139,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://airflow:airflow@postgres:5432/data
       MODEL_PATH: /app/Model/artifacts/lightgbm_abt.pkl
-      CREDIT_APPROVE_MAX_SCORE: "0.35"
-      CREDIT_MANUAL_REVIEW_MAX_SCORE: "0.65"
+      CREDIT_APPROVE_MAX_SCORE: "0.50"
+      CREDIT_MANUAL_REVIEW_MAX_SCORE: "0.60"
       CREDIT_POLICY_VERSION: demo-v1
     depends_on:
       - postgres
