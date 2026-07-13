@@ -253,6 +253,28 @@ docker compose up -d --build postgres credit-api credit-frontend
 | Health check | http://localhost:8000/health | — |
 | Streamlit | http://localhost:8501 | — |
 
+### Prontidão da API e carregamento do modelo
+
+O processo do `credit-api` pode iniciar mesmo que o artefato ainda não esteja
+disponível no volume. A API tenta carregar o modelo em segundo plano e, em caso de
+falha, registra o erro no log e repete a operação após o intervalo configurado em
+`MODEL_LOAD_RETRY_SECONDS`.
+
+Durante esse período, `GET /health` responde HTTP `503` e informa o caminho do
+artefato e o último erro de carregamento. Os endpoints que dependem do modelo
+também respondem `503`, evitando predições sem um artefato válido. Assim que uma
+tentativa é bem-sucedida, `/health` passa a responder HTTP `200` com
+`model_loaded: true`, sem necessidade de reiniciar o container.
+
+Para acompanhar as tentativas:
+
+```bash
+docker compose logs -f credit-api
+```
+
+O contrato completo e exemplos das respostas estão descritos no
+[`README` do MLOps](MLOps/README.md#carregamento-do-modelo-e-health-check).
+
 ## Execução do pipeline
 
 1. Acesse o Airflow em http://localhost:8080.

@@ -29,7 +29,6 @@ class PredictionResponse(BaseModel):
     customer_id: int | None = None
     risk_score: float = Field(ge=0, le=1)
     predicted_class: int = Field(ge=0, le=1)
-    model_decision_threshold: float = Field(ge=0, le=1)
     policy: CreditPolicyResult
 
 
