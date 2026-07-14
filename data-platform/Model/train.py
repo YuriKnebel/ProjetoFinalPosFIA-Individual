@@ -50,14 +50,23 @@ def load_training_data(config: dict[str, Any], conn_id: str = "postgres_data_db"
     conn = get_database_connection(conn_id=conn_id, silent=False)
     
     table = config["metadata"]["abt_table"]
-    query = f'SELECT * FROM "{table}"'
-    if sample_size:
-        query += f" LIMIT {int(sample_size)}"
-        
+    identifier = config["variables"]["identifier"]
+    # ORDER BY pelo identificador garante ordem estavel das linhas: sem isso o CTAS da ABT
+    # devolve as linhas em ordem variavel e o train_test_split (seed fixa) escolhe um holdout
+    # diferente a cada run, mudando o metrics.json mesmo com a base intacta.
+    query = f'SELECT * FROM "{table}" ORDER BY "{identifier}"'
+
     try:
         frame = pd.read_sql_query(query, conn)
     finally:
         conn.close()
+
+    if sample_size:
+        # Smoke test: amostra ALEATORIA com seed fixa (reprodutivel e representativa),
+        # em vez de LIMIT, que pegaria sempre os N menores ids -> fatia enviesada.
+        seed = config["parameters"]["random_state"]
+        n = min(int(sample_size), len(frame))
+        frame = frame.sample(n=n, random_state=seed).sort_values(identifier).reset_index(drop=True)
 
     print(f"[dados] ABT carregada: {frame.shape[0]:,} linhas x {frame.shape[1]} colunas")
 
