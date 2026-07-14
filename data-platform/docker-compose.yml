@@ -101,6 +101,11 @@ services:
       # Chave compartilhada para o airflow interagir entre os containers
       AIRFLOW__WEBSERVER__SECRET_KEY: "tcc_fia_labdata_engenharia_dados"
       AIRFLOW__CORE__FERNET_KEY: "7777777777777777777777777777777777777777777="
+      # Folga no parse da DAG: sob carga (LocalExecutor roda as tasks pesadas aqui no scheduler),
+      # o parse reimporta lightgbm/sklearn e estourava o timeout, fazendo o Airflow desativar a DAG.
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: 120
+      AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT: 240
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: 120
     command: scheduler
     volumes:
       - ./airflow/dags:/opt/airflow/dags
