@@ -439,7 +439,7 @@ A variável resposta chega tarde. Só sabemos se um cliente aprovado é bom ou m
 
 No curto prazo, sem rótulo, dá para usar indicadores indiretos: se a taxa de aprovação sair da casa dos ~67% do baseline (proponho ±5 p.p.), ou se o volume da faixa de revisão humana subir muito além dos 12,3%, algo mudou — na população ou no pipeline — e dá para descobrir logo, não após meses.
 
-No longo prazo, quando a safra amadurece, compara-se AUC/KS e o default real dos aprovados com o baseline; uma queda superior a 10% é gatilho de retreino.
+No longo prazo, quando a base amadurece, compara-se AUC/KS e o default real dos aprovados com o baseline; uma queda superior a 10% é gatilho de retreino.
 
 Essa comparação de longo prazo tem uma armadilha que é assumida desde já: o viés de seleção. Só consigo observar o desfecho de quem foi aprovado. Um pedido negado nunca vira bom ou mau pagador, porque o empréstimo não aconteceu. Qualquer AUC recalculado em produção estará restrito à população com score abaixo do corte e não pode ser comparado diretamente com o que foi medido na distribuição inteira. Ignorar isso leva a concluir que o modelo piorou quando na verdade mudou a régua. As saídas possíveis, em ordem de custo: 
 1) recalcular a referência na mesma fatia da população. O holdout guarda score e rótulo de todos os clientes — inclusive dos que seriam negados, porque na base histórica o desfecho de todo mundo é conhecido. O recálculo funciona assim: filtra-se o holdout mantendo apenas os clientes com score abaixo do corte (os que teriam sido aprovados) e recalcula-se o AUC somente nessa fatia. Esse número é naturalmente menor que o da distribuição inteira, porque os casos extremos e fáceis de ordenar (score muito alto ou muito baixo) ficam de fora — e é ele a régua justa para comparar com o AUC de produção, que só enxerga essa mesma fatia. É a saída mais barata das três: o holdout já existe salvo, com scores e rótulos, então o recálculo é só um filtro e uma nova medição;
@@ -487,13 +487,15 @@ Para o score, isso foi tratado como decisão de modelagem. Para o texto gerado, 
 
 A implementação proposta é uma marcação de citabilidade por feature, aplicada no código antes da chamada ao modelo de linguagem: os campos marcados como não citáveis (caso do `code_gender`) são removidos dos dados antes do envio. A alternativa — enviar tudo e instruir no prompt "não mencione o gênero" — é frágil, porque instrução textual é um pedido que o modelo pode eventualmente descumprir. Já o campo removido nunca chega ao modelo, e ele não tem como citar o que não recebeu.
 
+Completando a governança, cada dossiê gerado registra a versão do modelo, da política e do prompt que o produziram. Sem esse rastro, um relatório contestado meses depois não teria como ser reconstituído; com ele, é possível saber exatamente que combinação de score, regra e instrução gerou cada texto.
+
 #### Comportamento em falha
 
 O agente depende de um provedor externo de LLM, e essa dependência não pode ficar no caminho crítico da predição. A API publica a solicitação de dossiê de forma assíncrona (uma fila simples resolve, ou, numa versão ainda mais enxuta, o próprio log de predições persistido serve de fonte para processamento posterior) e devolve o score sem esperar. Se o LLM estiver indisponível, a predição continua funcionando e o dossiê fica pendente sendo gerado quando o LLM voltar.
 
 #### Conexão com o monitoramento
 
-Os itens iii e iv se fecham num ciclo. Um alerta de PSI acima de 0,25 ou uma queda confirmada de performance pode disparar uma nova execução da DAG de treino — essa parte pode ser automática, porque retreinar gera apenas um artefato candidato e não muda nada do que está em produção. Já a publicação do modelo novo permanece decisão humana, com comparação de métricas antes da troca. É a mesma divisão defendida ao longo de toda a proposta: a automação prepara (retreina, calcula, organiza evidências) e a pessoa decide (investiga o alerta, publica o modelo, concede o crédito).
+Os itens iii e iv se fecham num ciclo. Um alerta de PSI acima de 0,25 ou uma queda confirmada de performance pode disparar uma nova execução da DAG de treino. Já a publicação do modelo novo permanece decisão humana, com comparação de métricas antes da troca. É a mesma divisão defendida ao longo de toda a proposta: a automação prepara (retreina, calcula, organiza evidências) e a pessoa decide (investiga o alerta, publica o modelo, concede o crédito).
 
 ## Componentes relacionados
 
