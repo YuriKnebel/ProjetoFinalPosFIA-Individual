@@ -1,26 +1,35 @@
+import pickle
 import unittest
 from pathlib import Path
-
-import pandas as pd
 
 from MLOps.app.api.model_service import ModelInputError, PredictionService
 
 
 DATA_PLATFORM_DIR = Path(__file__).resolve().parents[2]
+ARTIFACT_PATH = DATA_PLATFORM_DIR / "Model" / "artifacts" / "lightgbm_abt.pkl"
+
+
+def build_sample_features(artifact_path: Path) -> dict:
+    """Monta um cliente de teste a partir do contrato salvo no proprio artefato.
+
+    Evita depender de CSVs externos (nao versionados): as categoricas usam a
+    primeira categoria persistida e as numericas recebem zero.
+    """
+    with artifact_path.open("rb") as file:
+        artifact = pickle.load(file)
+    categories = artifact.get("categories", {})
+    return {
+        name: categories[name][0] if name in categories else 0.0
+        for name in artifact["features"]
+    }
 
 
 class PredictionServiceTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.service = PredictionService(
-            DATA_PLATFORM_DIR / "Model" / "artifacts" / "logistic_regression_abt.pkl"
-        )
+        cls.service = PredictionService(ARTIFACT_PATH)
         cls.service.load()
-        abt = pd.read_csv(
-            DATA_PLATFORM_DIR / "Dados" / "abt.csv",
-            nrows=1,
-        )
-        cls.features = abt.drop(columns=["sk_id_curr", "target"]).iloc[0].to_dict()
+        cls.features = build_sample_features(ARTIFACT_PATH)
 
     def test_prediction_is_valid(self) -> None:
         score, predicted_class = self.service.predict(self.features)
