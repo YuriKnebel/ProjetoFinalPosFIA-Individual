@@ -13,14 +13,17 @@ class ConfigurationTest(unittest.TestCase):
             "Dados/README.md",
             "DataPipeline/data_sanitization.py",
             "DataPipeline/abt_transform.py",
-            "DataPipeline/exp_analysis.ipynb",
+            "DataPipeline/exp_analysis_raw.ipynb",
+            "DataPipeline/exp_analysis_abt.ipynb",
             "DataPipeline/config_pipeline.json",
             "Model/train.py",
             "Model/config_model.json",
             "Model/evaluation.ipynb",
+            "Model/predict.py",
             "MLOps/app/api/main.py",
             "MLOps/app/frontend/app.py",
             "airflow/dags/pipeline_orchestration.py",
+            "docker-compose.yml",
             "requirements.txt",
         )
         missing = [
@@ -30,14 +33,19 @@ class ConfigurationTest(unittest.TestCase):
         self.assertTrue((DATA_PLATFORM_DIR.parent / "README.md").is_file())
 
     def test_required_sections_exist_in_both_configurations(self) -> None:
-        for relative_path in (
-            "DataPipeline/config_pipeline.json",
-            "Model/config_model.json",
-        ):
-            config = json.loads(
-                (DATA_PLATFORM_DIR / relative_path).read_text(encoding="utf-8")
+        model_config = json.loads(
+            (DATA_PLATFORM_DIR / "Model/config_model.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue({"metadata", "variables", "parameters"} <= model_config.keys())
+
+        pipeline_config = json.loads(
+            (DATA_PLATFORM_DIR / "DataPipeline/config_pipeline.json").read_text(
+                encoding="utf-8"
             )
-            self.assertTrue({"metadata", "variables", "parameters"} <= config.keys())
+        )
+        self.assertTrue(
+            {"ingestion_table", "database", "sanitization"} <= pipeline_config.keys()
+        )
 
     def test_model_features_match_persisted_artifact(self) -> None:
         config = json.loads(
@@ -45,13 +53,12 @@ class ConfigurationTest(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        with (
-            DATA_PLATFORM_DIR / "Model/artifacts/logistic_regression_abt.pkl"
-        ).open("rb") as file:
+        artifact_path = DATA_PLATFORM_DIR / config["metadata"]["artifact"]
+        with artifact_path.open("rb") as file:
             artifact = pickle.load(file)
         self.assertEqual(
             config["variables"]["input_features"],
-            artifact["input_features"],
+            artifact["features"],
         )
 
 

@@ -128,6 +128,14 @@ with DAG(
 
     cria_indices = task_criar_indices(CONN_ID)
 
+    # Longest-processing-time-first: installments e a fonte maior/mais lenta.
+    # Como o pool de sanitizacao tem poucos slots, inicia-la primeiro reduz o tempo total da DAG.
+    limpeza_installments = task_sanitize_installments(
+        conn_id=CONN_ID,
+        input_t=db_config.get("input_installments_table"),
+        output_t=db_config.get("output_installments_table"),
+    )
+
     limpeza_app = task_sanitize_app(
         conn_id=CONN_ID,
         input_t=db_config.get("input_table"),
@@ -148,16 +156,10 @@ with DAG(
         output_t=db_config.get("output_bureau_table"),
     )
 
-    limpeza_installments = task_sanitize_installments(
-        conn_id=CONN_ID,
-        input_t=db_config.get("input_installments_table"),
-        output_t=db_config.get("output_installments_table"),
-    )
-
     t_abt_index = task_abt_indexes(CONN_ID, db_config)
+    t_inst = task_agg_inst(CONN_ID, db_config.get("output_installments_table"))
     t_prev = task_agg_prev(CONN_ID, db_config.get("output_prev_table"))
     t_bureau = task_agg_bureau(CONN_ID, db_config.get("output_bureau_table"))
-    t_inst = task_agg_inst(CONN_ID, db_config.get("output_installments_table"))
     t_abt_final = task_abt_final_generation(CONN_ID, db_config)
 
     treino_modelo = task_train(CONN_ID, db_config.get("abt_table"))
@@ -166,7 +168,7 @@ with DAG(
     (
         carga_inicial
         >> cria_indices
-        >> [limpeza_app, limpeza_prev, limpeza_bureau, limpeza_installments]
+        >> [limpeza_installments, limpeza_app, limpeza_prev, limpeza_bureau]
         >> t_abt_index
     )
-    t_abt_index >> [t_prev, t_bureau, t_inst] >> t_abt_final >> treino_modelo
+    t_abt_index >> [t_inst, t_prev, t_bureau] >> t_abt_final >> treino_modelo

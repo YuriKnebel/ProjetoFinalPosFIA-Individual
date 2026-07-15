@@ -1,0 +1,12 @@
+# Dependencias para desenvolvimento local do pipeline de dados e do modelo.
+# Uso: pip install -r requirements.txt (a partir da pasta data-platform).
+#
+# Cada componente conteinerizado possui o proprio arquivo de dependencias,
+# instalado durante o build da imagem correspondente:
+#   - MLOps/app/api/requirements.txt       (API de predicao - FastAPI)
+#   - MLOps/app/frontend/requirements.txt  (interface Streamlit)
+#   - MLOps/test-requirements.txt          (testes automatizados)
+#   - airflow/requirements.txt             (imagem do Airflow)
+#   - jupyter/requirements.txt             (ambiente de notebooks)
+-r DataPipeline/requirements.txt
+-r Model/requirements.txt
