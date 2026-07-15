@@ -10,11 +10,11 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -34,26 +34,26 @@ services:
         condition: service_healthy
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
       # Chave compartilhada para o airflow interagir entre os containers
-      AIRFLOW__WEBSERVER__SECRET_KEY: "tcc_fia_labdata_engenharia_dados"
-      AIRFLOW__CORE__FERNET_KEY: "7777777777777777777777777777777777777777777="
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
       # Variáveis nativas que criam automaticamente o usuário admin na inicialização do container
       _AIRFLOW_WWW_USER_CREATE: "true"
-      _AIRFLOW_WWW_USER_USERNAME: admin
-      _AIRFLOW_WWW_USER_PASSWORD: admin
-      _AIRFLOW_WWW_USER_FIRSTNAME: Admin
-      _AIRFLOW_WWW_USER_LASTNAME: User
-      _AIRFLOW_WWW_USER_ROLE: Admin
-      _AIRFLOW_WWW_USER_EMAIL: admin@example.com
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+      _AIRFLOW_WWW_USER_FIRSTNAME: ${AIRFLOW_ADMIN_FIRSTNAME}
+      _AIRFLOW_WWW_USER_LASTNAME: ${AIRFLOW_ADMIN_LASTNAME}
+      _AIRFLOW_WWW_USER_ROLE: ${AIRFLOW_ADMIN_ROLE}
+      _AIRFLOW_WWW_USER_EMAIL: ${AIRFLOW_ADMIN_EMAIL}
     command: >
       bash -c "mkdir -p /opt/airflow/data/csv /opt/airflow/Model/artifacts &&
       chmod -R ugo+rwX /opt/airflow/data /opt/airflow/Model/artifacts &&
       airflow db migrate &&
-      airflow users create --username admin --firstname Airflow --lastname Admin --role Admin --email admin@example.com --password admin &&
-      airflow pools set pool_ingestao 2 'Pool exclusivo para limitar a ingestão a 2 task por vez' &&
-      airflow pools set pool_sanitization 2 'Pool exclusivo para limitar a sanitizacao a 2 task por vez' &&
-      airflow pools set pool_aggregation 2 'Pool exclusivo para limitar a agregacao a 2 task por vez'"
+      airflow users create --username ${AIRFLOW_ADMIN_USERNAME} --firstname ${AIRFLOW_ADMIN_FIRSTNAME} --lastname ${AIRFLOW_ADMIN_LASTNAME} --role ${AIRFLOW_ADMIN_ROLE} --email ${AIRFLOW_ADMIN_EMAIL} --password ${AIRFLOW_ADMIN_PASSWORD} &&
+      airflow pools set pool_ingestao ${POOL_INGESTAO_SIZE} 'Pool para limitar a ingestao simultanea' &&
+      airflow pools set pool_sanitization ${POOL_SANITIZATION_SIZE} 'Pool para limitar a sanitizacao simultanea' &&
+      airflow pools set pool_aggregation ${POOL_AGGREGATION_SIZE} 'Pool para limitar a agregacao simultanea'"
     volumes:
       - ./Model:/opt/airflow/Model
       - ./airflow/data:/opt/airflow/data
@@ -72,10 +72,10 @@ services:
       - "8080:8080"
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
       # Chave compartilhada para o airflow interagir entre os containers
-      AIRFLOW__WEBSERVER__SECRET_KEY: "tcc_fia_labdata_engenharia_dados"
-      AIRFLOW__CORE__FERNET_KEY: "7777777777777777777777777777777777777777777="
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
     command: webserver
     volumes:
       - ./airflow/dags:/opt/airflow/dags
@@ -95,12 +95,12 @@ services:
         condition: service_completed_successfully
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
       # Conexão com postgres SQL do banco Data -> Vai criar um CONN ID automatico
-      AIRFLOW_CONN_POSTGRES_DATA_DB: "postgresql://airflow:airflow@postgres:5432/data"
+      AIRFLOW_CONN_POSTGRES_DATA_DB: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATA_DB}"
       # Chave compartilhada para o airflow interagir entre os containers
-      AIRFLOW__WEBSERVER__SECRET_KEY: "tcc_fia_labdata_engenharia_dados"
-      AIRFLOW__CORE__FERNET_KEY: "7777777777777777777777777777777777777777777="
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
       # Folga no parse da DAG: sob carga (LocalExecutor roda as tasks pesadas aqui no scheduler),
       # o parse reimporta lightgbm/sklearn e estourava o timeout, fazendo o Airflow desativar a DAG.
       AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: 120
@@ -128,6 +128,11 @@ services:
     environment:
       - JUPYTER_ENABLE_LAB=yes
       - JUPYTER_TOKEN=${JUPYTER_TOKEN}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DATA_DB=${POSTGRES_DATA_DB}
     # Altere para a mesma rede que o seu Postgres e Airflow usam:
     depends_on:
       - postgres
@@ -142,12 +147,12 @@ services:
     ports:
       - "${CREDIT_API_PORT:-8000}:8000"
     environment:
-      DATABASE_URL: postgresql+psycopg2://airflow:airflow@postgres:5432/data
-      MODEL_PATH: /app/Model/artifacts/lightgbm_abt.pkl
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATA_DB}
+      MODEL_PATH: ${MODEL_PATH}
       MODEL_LOAD_RETRY_SECONDS: ${MODEL_LOAD_RETRY_SECONDS:-5}
       CREDIT_APPROVE_MAX_SCORE: ${CREDIT_APPROVE_MAX_SCORE}
       CREDIT_MANUAL_REVIEW_MAX_SCORE: ${CREDIT_MANUAL_REVIEW_MAX_SCORE}
-      CREDIT_POLICY_VERSION: demo-v1
+      CREDIT_POLICY_VERSION: ${CREDIT_POLICY_VERSION}
     depends_on:
       - postgres
     volumes:
