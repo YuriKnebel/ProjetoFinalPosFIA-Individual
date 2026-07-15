@@ -127,7 +127,8 @@ def show_result(result: dict[str, Any]) -> None:
     )
     st.info(
         "Este score é uma pontuação para ordenação de risco e não uma probabilidade "
-        "calibrada de inadimplência. A recomendação é demonstrativa e requer validação humana."
+        "calibrada de inadimplência. A decisão segue a política de crédito: aprovação e "
+        "negação são automáticas e os casos entre os limiares seguem para revisão humana."
     )
     with st.expander("Resposta completa da API"):
         st.json(result)
