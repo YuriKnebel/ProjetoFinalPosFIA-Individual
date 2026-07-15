@@ -3,7 +3,7 @@
     "project": "Predicao de risco de credito (Home Credit Default Risk)",
     "component": "Model",
     "version": "1.0.0",
-    "last_updated": "2026-07-13",
+    "last_updated": "2026-07-14",
     "description": "Configuracao de treinamento, avaliacao e inferencia do modelo de risco de credito.",
     "algorithm": "LightGBM",
     "problem_type": "binary_classification",
@@ -87,11 +87,11 @@
       "folds": 5
     },
     "test_metrics": {
-      "roc_auc": 0.7649,
-      "gini": 0.5298,
-      "ks": 0.4057,
-      "average_precision": 0.2557,
-      "brier": 0.1938
+      "roc_auc": 0.7586,
+      "gini": 0.5171,
+      "ks": 0.3982,
+      "average_precision": 0.2408,
+      "brier": 0.1934
     }
   }
 }
