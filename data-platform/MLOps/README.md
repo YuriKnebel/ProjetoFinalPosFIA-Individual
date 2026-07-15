@@ -408,28 +408,92 @@ MLOps/.venv/bin/python -m unittest discover -s MLOps/tests -v
 
 ## Próximos passos
 
-Além de calibração do score, autenticação e adoção de um *model registry*, dois eixos completam a proposta de arquitetura (itens iii e iv do escopo individual).
+Além de calibração do score, autenticação e adoção de um *model registry*, dois eixos completam a proposta de arquitetura, atendendo aos itens iii e iv do escopo individual. Os dois são especificação de próxima fase, não implementação, mas foram desenhados sobre os componentes e os números que este projeto já produz.
 
-### iii. Monitoramento em produção
+### iii. Monitoramento dos dados e do modelo em produção
 
-O objetivo é detectar **falhas, perda de performance e mudança de comportamento dos dados** antes que afetem a decisão de crédito. Como a base é **transversal (sem datas absolutas de originação)**, o monitoramento é definido por **lote de novas aplicações comparado ao baseline de treino** — e não por safra temporal, que exigiria coortes datadas inexistentes neste conjunto. Cada dimensão tem um **alerta** que aciona reavaliação ou re-treino:
+Um serviço convencional quebra fazendo barulho: erro HTTP, task vermelha no Airflow, exceção no log. Um modelo de machine learning tem um segundo modo de falha, mais perigoso, porque é silencioso: ele continua respondendo scores com aparência normal mesmo quando a população mudou ou quando a fonte de uma feature degradou. Ninguém percebe até o prejuízo aparecer na carteira, meses depois. O plano de monitoramento existe para encurtar esse tempo.
 
-- **estabilidade dos dados** — PSI do score e das principais features de cada novo lote contra a população de treino (não depende de rótulos nem de datas);
-- **desempenho** — AUC/KS recalculados à medida que os desfechos (inadimplência) dos aprovados amadurecem, contra o baseline do teste;
-- **decisão** — taxa de aprovação e inadimplência observada dos aprovados por lote;
-- **calibração** — Brier / curva de calibração conforme os desfechos são observados;
-- **fairness** — desempenho e taxa de negados por subgrupo.
+#### Possíveis falhas
+
+É a camada mais simples e a primeira a cobrir, porque a causa mais comum de score errado em produção não é estatística, é operacional: pipeline que falha no meio, artefato que não carrega, fonte que muda de formato.
+
+Parte dos sensores já existe nesta plataforma: o `/health` da API distingue "processo no ar" de "modelo carregado" (respondendo `503` enquanto o artefato não carrega) e o Airflow registra o status de cada task da DAG. O que a proposta adiciona é a observação sistemática sobre esses sensores, que hoje não existe: medir a taxa de `503` e a latência de predição ao longo do tempo, alertar quando uma task falha e verificar a integridade dos dados de entrada (taxa de nulos por feature e aparecimento de categorias desconhecidas, comparadas com o treino) antes de pontuar.
+
+#### Mudanças de comportamento dos dados
+
+O modelo foi treinado com uma fotografia da população. Se o perfil de quem pede crédito mudar (uma crise econômica, uma campanha que atrai outro público, etc) o modelo segue respondendo com confiança sobre uma população que nunca viu. Para detectar isso sem depender de rótulo, podemos comparar a distribuição dos dados novos com a do treino usando o PSI (*Population Stability Index*), calculado por lote de aplicações, usando os decis do score de treino como bins fixos (a mesma partição da tabela de decis do `evaluation.ipynb`).
+
+Os limiares adotados são convenção de mercado, não derivados desta base (calibrar isso exigiria um histórico que não temos no momento): 
+- abaixo de 0,10, população estável; 
+- entre 0,10 e 0,25, atenção; 
+- acima de 0,25, mudança relevante e gatilho de investigação.
+
+O PSI é calculado para o score e para as features de maior impacto tendo em primeiro lugar a `ext_source_mean`, porque a análise de permutação mostrou que ela sustenta o modelo quase sozinha, cerca de treze vezes a segunda colocada. Uma quebra na fonte desse score externo é o maior risco isolado deste modelo, e por isso seria o primeiro alerta a ser implementado.
+
+Foi optado monitorar por lote, e não por safra temporal, porque a base Home Credit é transversal: não há data de origem. Num cenário real com datas, a mesma lógica passa a rodar por safra sem mudar de estrutura, muda só a chave de agrupamento. Ou seja, deixaria de agrupar pela semana em que foi pontuado, e passaria a agrupar pelo mês em que o contrato foi originado.
+
+#### Perda de performance
+
+A variável resposta chega tarde. Só sabemos se um cliente aprovado é bom ou mau pagador meses depois da concessão, não existe "AUC de ontem". Por isso a detecção acontece em dois tempos.
+
+No curto prazo, sem rótulo, dá para usar indicadores indiretos: se a taxa de aprovação sair da casa dos ~67% do baseline (proponho ±5 p.p.), ou se o volume da faixa de revisão humana subir muito além dos 12,3%, algo mudou — na população ou no pipeline — e dá para descobrir logo, não após meses.
+
+No longo prazo, quando a safra amadurece, compara-se AUC/KS e o default real dos aprovados com o baseline; uma queda superior a 10% é gatilho de retreino.
+
+Essa comparação de longo prazo tem uma armadilha que é assumida desde já: o viés de seleção. Só consigo observar o desfecho de quem foi aprovado. Um pedido negado nunca vira bom ou mau pagador, porque o empréstimo não aconteceu. Qualquer AUC recalculado em produção estará restrito à população com score abaixo do corte e não pode ser comparado diretamente com o que foi medido na distribuição inteira. Ignorar isso leva a concluir que o modelo piorou quando na verdade mudou a régua. As saídas possíveis, em ordem de custo: 
+1) recalcular a referência na mesma fatia da população. O holdout guarda score e rótulo de todos os clientes — inclusive dos que seriam negados, porque na base histórica o desfecho de todo mundo é conhecido. O recálculo funciona assim: filtra-se o holdout mantendo apenas os clientes com score abaixo do corte (os que teriam sido aprovados) e recalcula-se o AUC somente nessa fatia. Esse número é naturalmente menor que o da distribuição inteira, porque os casos extremos e fáceis de ordenar (score muito alto ou muito baixo) ficam de fora — e é ele a régua justa para comparar com o AUC de produção, que só enxerga essa mesma fatia. É a saída mais barata das três: o holdout já existe salvo, com scores e rótulos, então o recálculo é só um filtro e uma nova medição;
+2) aprovar deliberadamente uma amostra pequena na zona de recusa para gerar rótulo sem viés (grupo de controle). Tem custo real, porém, com valor estatístico alto; 
+3) *reject inference*, que é a prática de mercado, mas depende de premissas fortes. Nesse caso, é inferido o que os negados teriam feito.
+
+#### Como isso rodaria na plataforma atual
+
+Nenhum componente novo é necessário. A API já registra cada predição em JSON no stdout do container; o primeiro passo é persistir esse log numa tabela do PostgreSQL. Uma DAG de monitoramento no Airflow passa a rodar por lote, calcula PSI, mix de decisão e taxas, compara com o baseline e grava o resultado numa tabela de métricas versionada (`model_version` e `policy_version`). O acompanhamento vira uma consulta SQL (ou um painel de BI sobre essas tabelas). Quando um alerta dispara, a investigação é humana; se a conclusão for retreinar, a DAG `pipeline_orchestration` é executada novamente.
 
 ### iv. Ações automatizadas a partir das previsões
 
-As predições podem **acionar ações** de negócio, conectando ML, automação e agentes de IA:
+Neste projeto, a primeira camada de automação já está construída, que é a própria política de crédito:
 
-- **roteamento automático** do pedido conforme a faixa da política (aprovação direta, fila de revisão humana, recusa justificada);
-- **priorização da fila** de análise pelos casos de maior risco/valor;
-- **agente de IA** que compõe um resumo explicável da decisão (drivers SHAP + política aplicada) para o analista;
-- **gatilho de re-treino** aberto automaticamente quando um alerta de drift ou queda de performance dispara.
+| Faixa de score | Recomendação | Ação automatizada | Volume (holdout) |
+|---|---|---|---|
+| < 0,50 | `approve` | esteira de aprovação e comunicação ao cliente, sem intervenção humana | ~67% |
+| 0,50 a 0,60 | `manual_review` | entra na fila de análise humana, com dossiê preparado por agente | ~12,3% |
+| ≥ 0,60 | `reject` | recusa automática com justificativa; contestação escala para humano | ~20,5% |
 
-Essas ações permanecem **sob supervisão humana**: o modelo ordena risco e recomenda; a concessão final segue a política e a análise do analista.
+Cerca de 88% dos pedidos são decididos sem nenhum humano. O ganho de automação já aconteceu nas pontas; o custo operacional que resta está concentrado nos 12,3% do meio e é aí que o agente de IA passa a fazer sentido.
+
+#### O agente de apoio à revisão humana
+
+O analista que recebe um caso de revisão recebe hoje, na prática, um JSON com 42 features e um score. A proposta do agente é a seguinte: um modelo de linguagem recebe a resposta que a API já produz (score, recomendação, limiares, versão da política) mais os dados cadastrais autorizados, e escreve o dossiê em linguagem natural com informações relevantes para a tomada de decisão do analista:
+- em que faixa o cliente caiu;
+- como ele se compara com a população;
+- o que a política determina. 
+
+Ou seja, um tradutor de técnico para humano. O agente não produz nenhum número que não tenha recebido pronto.
+
+Em crédito um número alucinado por um LLM que influencie uma negação indevida pode virar passivo jurídico.
+Um dossiê mal escrito que o analista ignora custa quase nada. Já um número inventado pelo LLM que induza o analista a negar crédito indevidamente pode ter impactos jurídicos. Por isso o modelo ordena (score), a política enquadra (faixa), o analista decide (concessão), o agente escreve (texto). Cada camada faz uma coisa e a responsabilidade da decisão fica no humano.
+
+Além do dossiê, dois gatilhos determinísticos completam a automação da fila: 
+1) a ordenação por risco × exposição (`risk_score` × `amt_credit`), para que o analista olhe primeiro onde há mais dinheiro em jogo, e não quem chegou primeiro; 
+2) e a contraproposta automática para recusados próximos do corte (limite menor, prazo maior), convertendo parte das negações em receita com risco controlado.
+
+Hoje a API não devolve os drivers individuais de cada score. Incluir a explicação local (SHAP) na resposta daria ao agente o "porquê" de cada caso, além do "quanto". O dossiê do agente deixa de ser descritivo ("caiu na faixa de revisão") e vira explicativo ("caiu na revisão principalmente por X e Y").
+
+#### Governança do conteúdo gerado
+
+Este é o ponto mais sensível da proposta, e nasce da análise de fairness do próprio projeto. O modelo usa `code_gender`, e a taxa de negação é maior para homens, acompanhando a inadimplência real de cada grupo. 
+Para o score, isso foi tratado como decisão de modelagem. Para o texto gerado, o tratamento precisa ser mais duro: gênero não pode aparecer como justificativa em nenhum dossiê ou comunicação, porque estatística interna auditável é uma coisa e justificativa declarada é discriminação.
+
+A implementação proposta é uma marcação de citabilidade por feature, aplicada no código antes da chamada ao modelo de linguagem: os campos marcados como não citáveis (caso do `code_gender`) são removidos dos dados antes do envio. A alternativa — enviar tudo e instruir no prompt "não mencione o gênero" — é frágil, porque instrução textual é um pedido que o modelo pode eventualmente descumprir. Já o campo removido nunca chega ao modelo, e ele não tem como citar o que não recebeu.
+
+#### Comportamento em falha
+
+O agente depende de um provedor externo de LLM, e essa dependência não pode ficar no caminho crítico da predição. A API publica a solicitação de dossiê de forma assíncrona (uma fila simples resolve, ou, numa versão ainda mais enxuta, o próprio log de predições persistido serve de fonte para processamento posterior) e devolve o score sem esperar. Se o LLM estiver indisponível, a predição continua funcionando e o dossiê fica pendente sendo gerado quando o LLM voltar.
+
+#### Conexão com o monitoramento
+
+Os itens iii e iv se fecham num ciclo. Um alerta de PSI acima de 0,25 ou uma queda confirmada de performance pode disparar uma nova execução da DAG de treino — essa parte pode ser automática, porque retreinar gera apenas um artefato candidato e não muda nada do que está em produção. Já a publicação do modelo novo permanece decisão humana, com comparação de métricas antes da troca. É a mesma divisão defendida ao longo de toda a proposta: a automação prepara (retreina, calcula, organiza evidências) e a pessoa decide (investiga o alerta, publica o modelo, concede o crédito).
 
 ## Componentes relacionados
 
