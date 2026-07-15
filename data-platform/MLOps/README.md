@@ -129,6 +129,16 @@ MLOps/
 └── README.md
 ```
 
+### Onde ficam o compose e a orquestração
+
+A especificação da etapa individual lista `docker-compose` e `pipeline_orchestration.py` ao lado de `MLOps`. Nesta solução eles ficam no **nível da plataforma**, porque orquestram todos os serviços — não apenas o MLOps:
+
+| Artefato do escopo | Local neste repositório |
+|---|---|
+| `docker-compose` | [`../docker-compose.yml`](../docker-compose.yml) — sobe Postgres, Airflow, API e frontend |
+| `pipeline_orchestration.py` | [`../airflow/dags/pipeline_orchestration.py`](../airflow/dags/pipeline_orchestration.py) — DAG bruta → clean → ABT → treino |
+| `predict.py` | [`../Model/predict.py`](../Model/predict.py) — serviço de predição local (CLI) |
+
 ## Configuração
 
 | Variável | Finalidade | Padrão no Compose |

@@ -6,6 +6,8 @@
 abt.csv
 .venv
 /data-platform/Model/.venv/**
-# artefato do modelo (binario; reproduzivel via train.py). metrics.json fica versionado.
+# Artefatos binarios ignorados por padrao (reproduziveis via train.py); metrics.json fica versionado.
+# Excecao: o modelo oficial e versionado para o avaliador rodar predict/API sem re-treinar.
 /data-platform/Model/artifacts/*.pkl
 /data-platform/Model/artifacts/*.joblib
+!/data-platform/Model/artifacts/lightgbm_abt.pkl
